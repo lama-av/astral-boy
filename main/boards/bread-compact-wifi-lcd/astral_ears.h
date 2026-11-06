@@ -89,7 +89,7 @@ private:
 
         int64_t now_us = esp_timer_get_time();
         if (frames_ > kWindow && quiet_speaker && rms > kStartleMin && rms > floor_ * kStartleRatio &&
-            recent < floor_ * 3.0f && !music_ && loud_log_ < 0.5f &&
+            recent < floor_ * 3.0f && !music_ &&
             now_us - last_music_us_ > 20 * 1000000LL && now_us - last_startle_us_ > 20 * 1000000LL) {
             last_startle_us_ = now_us;
             ESP_LOGI(TAG, "Susto! volume %d (fundo %d)", static_cast<int>(rms), static_cast<int>(floor_));
