@@ -192,7 +192,7 @@ void WifiBoard::StartWifiConfigMode() {
     // Astral Boy: avisa na tela como configurar pelo celular
     Application::GetInstance().Schedule([]() {
         Application::GetInstance().Alert(Lang::Strings::WIFI_CONFIG_MODE,
-                                         "Abra o app EspBlufi no celular e escolha o Astral Boy", "gear",
+                                         "Abra o app EspBlufi no celular e escolha BLUFI-AstralBoy", "gear",
                                          Lang::Sounds::OGG_WIFICONFIG);
     });
 #endif

@@ -12,7 +12,7 @@
 #include "freertos/task.h"
 #include "wifi_manager.h"
 
-#define BLUFI_DEVICE_NAME "Astral-Boy"
+#define BLUFI_DEVICE_NAME "BLUFI-AstralBoy"  // o app EspBlufi filtra por "BLUFI" no nome
 
 #ifdef CONFIG_BT_BLUEDROID_ENABLED
 #include "esp_bt_device.h"
