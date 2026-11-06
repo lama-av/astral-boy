@@ -2,6 +2,7 @@
 #define _ASTRAL_EARS_H_
 
 #include "application.h"
+#include "astral_music.h"
 #include "astral_pet.h"
 
 #include <esp_log.h>
@@ -53,6 +54,12 @@ private:
 
     void OnFrame(const std::vector<int16_t>& pcm) {
         if (pcm.empty()) {
+            return;
+        }
+        if (AstralMusic::IsPlaying()) {  // a musiquinha dele mesmo: não é susto nem música de fora
+            last_music_us_ = esp_timer_get_time();
+            music_ = false;
+            music_hits_ = 0;
             return;
         }
         // volume sem o "desvio" constante do microfone (DC): só a parte que vibra
@@ -153,6 +160,9 @@ private:
         // Para COMEÇAR precisa de som contínuo + batida; para CONTINUAR basta o som seguir contínuo
         // (a força da batida oscila muito de um trecho da música para outro).
         bool looks_like_music = music_ ? loud_frac >= 0.50f : (loud_frac >= kMusicLoudFrac && beat >= kMusicBeat);
+        if (esp_timer_get_time() - last_music_us_ < 4 * 1000000LL) {
+            looks_like_music = false;  // logo depois da musiquinha dele, o eco não conta
+        }
         if (looks_like_music) {
             music_misses_ = 0;
             if (++music_hits_ >= 2 && !music_) {  // 1 s seguido parecendo música

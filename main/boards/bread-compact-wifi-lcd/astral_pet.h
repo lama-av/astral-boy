@@ -387,7 +387,8 @@ private:
         if (seconds <= 0) {
             return;  // já está dançando
         }
-        ESP_LOGI("AstralPet", "Dancando com musica (%d s)", seconds);
+        ESP_LOGI("AstralPet", "Dancando com musica (%d s), estado %d", seconds,
+                 static_cast<int>(Application::GetInstance().GetDeviceState()));
         dance_until_us_ = esp_timer_get_time() + seconds * 1000000LL;
         shown_while_idle_ = false;
         mood_ = Clamp(mood_ + 2);
@@ -661,6 +662,9 @@ private:
             if (display != nullptr) {
                 display->SetEmotion(wanted.c_str());
             }
+            if (wanted != shown_emotion_) {
+                ESP_LOGI("AstralPet", "Rosto: %s", wanted.c_str());
+            }
             shown_emotion_ = wanted;
             shown_while_idle_ = true;
         }
@@ -784,6 +788,7 @@ private:
     }
 
     void React(const char* emotion, const char* message, int seconds = kReactSeconds) {
+        ESP_LOGI("AstralPet", "Reacao: %s (%s)", emotion, message);
         react_emotion_ = emotion;
         react_until_us_ = esp_timer_get_time() + seconds * 1000000LL;
         shown_while_idle_ = false;  // força atualizar o rosto no próximo Poll
