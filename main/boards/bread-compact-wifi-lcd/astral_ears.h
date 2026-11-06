@@ -32,10 +32,10 @@ private:
     static constexpr int kAnalyzeEvery = 50;       // analisa a música a cada 0,5 s
     static constexpr float kStartleRatio = 4.0f;   // susto: volume pula 4x acima do último meio segundo...
     static constexpr float kStartleMin = 1800.0f;  // ...e acima deste volume absoluto
-    static constexpr float kMusicLoudRatio = 3.0f; // música: volume acima de 3x o fundo quieto...
-    static constexpr float kMusicMin = 1500.0f;    // ...e acima deste volume absoluto
-    static constexpr float kMusicLoudFrac = 0.75f; // ...em 75% do tempo
-    static constexpr float kMusicBeat = 0.30f;     // força mínima da batida (autocorrelação)
+    static constexpr float kMusicLoudRatio = 2.2f; // música: volume acima de 2,2x o fundo quieto...
+    static constexpr float kMusicMin = 900.0f;     // ...e acima deste volume absoluto
+    static constexpr float kMusicLoudFrac = 0.65f; // ...em 65% do tempo
+    static constexpr float kMusicBeat = 0.22f;     // força mínima da batida (autocorrelação)
 
     AstralPet* pet_;
     std::vector<float> env_;
@@ -152,10 +152,10 @@ private:
 
         // Para COMEÇAR precisa de som contínuo + batida; para CONTINUAR basta o som seguir contínuo
         // (a força da batida oscila muito de um trecho da música para outro).
-        bool looks_like_music = music_ ? loud_frac >= 0.60f : (loud_frac >= kMusicLoudFrac && beat >= kMusicBeat);
+        bool looks_like_music = music_ ? loud_frac >= 0.50f : (loud_frac >= kMusicLoudFrac && beat >= kMusicBeat);
         if (looks_like_music) {
             music_misses_ = 0;
-            if (++music_hits_ >= 3 && !music_) {  // 1,5 s seguido parecendo música
+            if (++music_hits_ >= 2 && !music_) {  // 1 s seguido parecendo música
                 music_ = true;
                 ESP_LOGI(TAG, "Musica! (batida %.2f, %d%% alto)", beat, static_cast<int>(loud_frac * 100));
             }
