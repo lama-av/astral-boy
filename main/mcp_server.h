@@ -264,6 +264,7 @@ private:
     PropertyList properties_;
     ToolCallback callback_;
     bool user_only_ = false;
+    std::function<std::string()> description_fn_;  // Astral Boy: descrição que muda (estado atual)
 
 public:
     McpTool(const std::string& name, const std::string& description, const PropertyList& properties,
@@ -271,6 +272,7 @@ public:
         : name_(name), description_(description), properties_(properties), callback_(callback) {}
 
     void set_user_only(bool user_only) { user_only_ = user_only; }
+    void set_description_fn(std::function<std::string()> fn) { description_fn_ = std::move(fn); }
     inline const std::string& name() const { return name_; }
     inline const std::string& description() const { return description_; }
     inline const PropertyList& properties() const { return properties_; }
@@ -284,7 +286,8 @@ public:
             return {};
         }
         cJSON_AddStringToObject(json.get(), "name", name_.c_str());
-        cJSON_AddStringToObject(json.get(), "description", description_.c_str());
+        std::string description = description_fn_ ? description_fn_() : description_;
+        cJSON_AddStringToObject(json.get(), "description", description.c_str());
 
         CJsonUniquePtr input_schema(cJSON_CreateObject());
         if (input_schema == nullptr) {

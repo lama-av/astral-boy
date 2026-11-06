@@ -662,7 +662,12 @@ elseif(CONFIG_BOARD_TYPE_BREAD_COMPACT_WIFI_LCD)
     set(BOARD_DIR "bread-compact-wifi-lcd")
     set(BUILTIN_TEXT_FONT font_noto_sans_basic_16_4)
     set(BUILTIN_ICON_FONT font_material_symbols_16_4)
-    set(DEFAULT_EMOJI_COLLECTION noto-color-emoji_32)
+    # Astral Boy: expressões animadas (GIF 240x240) de uma pasta própria, fora do repositório.
+    # Para voltar às do Otto: set(DEFAULT_EMOJI_COLLECTION otto-gif)
+    # Outras opções prontas: "C:/astral/arte-tela/olhos-amarelos"
+    set(DEFAULT_EMOJI_COLLECTION "C:/astral/arte-tela/astral-flat-v6")
+    # Fonte lúdica do texto da tela (gerada por C:\astral\ferramentas\gerar_fonte.py)
+    set(ASTRAL_TEXT_FONT_FILE "C:/astral/arte-tela/fontes/font_astral_fredoka_20_4.bin")
 elseif(CONFIG_BOARD_TYPE_LILYGO_T_CIRCLE_S3)
     set(BOARD_DIR "lilygo/t-circle-s3")
     set(BUILTIN_TEXT_FONT font_noto_sans_basic_16_4)
@@ -1407,6 +1412,12 @@ function(build_default_assets_bin)
         if(EXISTS "${NOTO_FONTS_PATH}/manifest.json")
             list(APPEND DEFAULT_ASSETS_DEPENDENCIES "${NOTO_FONTS_PATH}/manifest.json")
         endif()
+    endif()
+
+    # Astral Boy: custom CBIN text font packaged instead of the Noto common font
+    if(ASTRAL_TEXT_FONT_FILE AND EXISTS "${ASTRAL_TEXT_FONT_FILE}")
+        list(APPEND BUILD_ARGS "--text_font_file" "${ASTRAL_TEXT_FONT_FILE}")
+        list(APPEND DEFAULT_ASSETS_DEPENDENCIES "${ASTRAL_TEXT_FONT_FILE}")
     endif()
 
     # Add default emoji collection if defined

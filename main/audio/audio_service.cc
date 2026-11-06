@@ -834,6 +834,22 @@ bool AudioService::MarkPlaybackDrainedLocked() {
     return true;
 }
 
+bool AudioService::PushPcmToPlaybackQueue(std::vector<int16_t>&& pcm, int timeout_ms) {
+    std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+    bool has_room = audio_queue_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [this]() {
+        return service_stopped_.load() || audio_playback_queue_.size() < MAX_PLAYBACK_TASKS_IN_QUEUE;
+    });
+    if (!has_room || service_stopped_.load()) {
+        return false;
+    }
+    AudioTask task;
+    task.type = kAudioTaskTypeDecodeToPlaybackQueue;
+    task.pcm = std::move(pcm);
+    audio_playback_queue_.push_back(std::move(task));
+    audio_queue_cv_.notify_all();
+    return true;
+}
+
 void AudioService::CheckAndUpdateAudioPowerState() {
     auto now = std::chrono::steady_clock::now();
     auto input_elapsed =

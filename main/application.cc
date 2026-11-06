@@ -286,6 +286,21 @@ void Application::Run() {
             auto display = Board::GetInstance().GetDisplay();
             display->UpdateStatusBar();
 
+            // Astral Boy: escutando sem ninguém falar (nem o servidor responder) por 12 s -> encerra
+            // (barulho de fundo engana o detector de voz: ele só estica o prazo até kListenMaxSeconds)
+            if (GetDeviceState() == kDeviceStateListening) {
+                int quiet_s = static_cast<int>((esp_timer_get_time() - listen_activity_us_.load()) / 1000000LL);
+                bool voice = audio_service_.IsVoiceDetected();
+                if (quiet_s % 5 == 0 && quiet_s > 0) {
+                    ESP_LOGI(TAG, "Escutando: %ds sem resposta (voz=%d)", quiet_s, voice ? 1 : 0);
+                }
+                if ((quiet_s >= kListenTimeoutSeconds && !voice) || quiet_s >= kListenMaxSeconds) {
+                    ESP_LOGI(TAG, "Listening timeout (%ds), encerrando a conversa", quiet_s);
+                    listen_activity_us_ = esp_timer_get_time();
+                    ToggleChatState();
+                }
+            }
+
             // Print debug info every 10 seconds
             if (clock_ticks_ % 10 == 0) {
                 SystemInfo::PrintHeapStats();
@@ -515,11 +530,11 @@ void Application::CheckNewVersion() {
         retry_count = 0;
         retry_delay = 10;  // Reset retry delay
 
+        // Astral Boy: o firmware é personalizado (pinos, rosto, fonte). Instalar o oficial
+        // sozinho apagaria tudo isso, então a atualização automática fica desligada.
         if (ota_->HasNewVersion()) {
-            if (UpgradeFirmware(ota_->GetFirmwareUrl(), ota_->GetFirmwareVersion())) {
-                return;  // This line will never be reached after reboot
-            }
-            // If upgrade failed, continue to normal operation
+            ESP_LOGW(TAG, "Official firmware %s available; auto-upgrade disabled for Astral Boy",
+                     ota_->GetFirmwareVersion().c_str());
         }
 
         // No new version, mark the current version as valid
@@ -602,6 +617,7 @@ void Application::InitializeProtocol() {
     });
 
     protocol_->OnIncomingJson([this, display](const cJSON* root) {
+        listen_activity_us_ = esp_timer_get_time();  // servidor respondendo também conta como atividade
         // Parse JSON data
         auto type = cJSON_GetObjectItem(root, "type");
         if (!cJSON_IsString(type)) {
@@ -695,8 +711,11 @@ void Application::InitializeProtocol() {
         } else if (strcmp(type->valuestring, "llm") == 0) {
             auto emotion = cJSON_GetObjectItem(root, "emotion");
             if (cJSON_IsString(emotion)) {
-                Schedule([display, emotion_str = std::string(emotion->valuestring)]() {
+                Schedule([this, display, emotion_str = std::string(emotion->valuestring)]() {
                     display->SetEmotion(emotion_str.c_str());
+                    if (emotion_listener_) {
+                        emotion_listener_(emotion_str);
+                    }
                 });
             }
         } else if (strcmp(type->valuestring, "mcp") == 0) {
@@ -929,6 +948,10 @@ void Application::HandleWakeWordDetectedEvent() {
     ESP_LOGI(TAG, "Wake word detected: %s (state: %d)", wake_word.c_str(), (int)state);
 
     if (state == kDeviceStateIdle) {
+        if (conversation_gate_ && !conversation_gate_()) {
+            audio_service_.EnableWakeWordDetection(true);  // continua ouvindo, mas não conversa
+            return;
+        }
         BeginWakeWordInvoke(wake_word);
     } else if (state == kDeviceStateNotifying) {
         StopNotification();
@@ -1042,7 +1065,8 @@ void Application::HandleStateChangedEvent() {
                     "neutral");  // Then set emotion (wechat mode checks child count)
             }
             audio_service_.EnableVoiceProcessing(false);
-            audio_service_.EnableWakeWordDetection(true);
+            // Astral Boy: um minigame pode pedir para a palavra de ativação ficar desligada
+            audio_service_.EnableWakeWordDetection(!wake_word_suppressed_.load());
             break;
         case kDeviceStateConnecting:
             display->SetStatus(Lang::Strings::CONNECTING);
@@ -1050,6 +1074,7 @@ void Application::HandleStateChangedEvent() {
             display->SetChatMessage("system", "");
             break;
         case kDeviceStateListening:
+            listen_activity_us_ = esp_timer_get_time();
             display->SetStatus(Lang::Strings::LISTENING);
             display->SetEmotion("neutral");
 

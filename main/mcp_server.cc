@@ -440,6 +440,7 @@ void McpServer::ParseMessage(const cJSON* json, ResponseSender response_sender) 
         message += "\"}}";
         ReplyResult(id_int, message, response_sender);
     } else if (method_str == "tools/list") {
+        ESP_LOGI(TAG, "tools/list requested");
         std::string cursor_str = "";
         bool list_user_only_tools = false;
         if (params != nullptr) {

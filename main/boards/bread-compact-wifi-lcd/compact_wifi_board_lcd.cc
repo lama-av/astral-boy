@@ -1,6 +1,13 @@
 #include "wifi_board.h"
 #include "codecs/no_audio_codec.h"
 #include "display/lcd_display.h"
+#include "astral_display.h"
+#include "astral_pet.h"
+#include "astral_radio.h"
+#include "astral_alarms.h"
+#include "astral_clock.h"
+#include "astral_web.h"
+#include "astral_game.h"
 #include "system_reset.h"
 #include "application.h"
 #include "button.h"
@@ -64,6 +71,9 @@ private:
  
     Button boot_button_;
     LcdDisplay* display_;
+    AstralPet* pet_ = nullptr;
+    AstralAlarms* alarms_ = nullptr;
+    AstralGame* game_ = nullptr;
 
     void InitializeSpi() {
         spi_bus_config_t buscfg = {};
@@ -85,7 +95,8 @@ private:
         io_config.cs_gpio_num = DISPLAY_CS_PIN;
         io_config.dc_gpio_num = DISPLAY_DC_PIN;
         io_config.spi_mode = DISPLAY_SPI_MODE;
-        io_config.pclk_hz = 40 * 1000 * 1000;
+        // Astral Boy: 10 MHz em vez de 40 MHz; fios longos de protoboard não seguram 40 MHz
+        io_config.pclk_hz = 10 * 1000 * 1000;
         io_config.trans_queue_depth = 10;
         io_config.lcd_cmd_bits = 8;
         io_config.lcd_param_bits = 8;
@@ -118,24 +129,74 @@ private:
 #ifdef  LCD_TYPE_GC9A01_SERIAL
         panel_config.vendor_config = &gc9107_vendor_config;
 #endif
-        display_ = new SpiLcdDisplay(panel_io, panel,
+        display_ = new AstralLcdDisplay(panel_io, panel,
                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
     void InitializeButtons() {
+        // Astral Boy: no minigame o botão responde no instante em que é apertado
+        boot_button_.OnPressDown([this]() {
+            if (game_ != nullptr && game_->IsActive()) {
+                game_->Press();
+            }
+        });
         boot_button_.OnClick([this]() {
+            if (game_ != nullptr && game_->IsActive()) {
+                return;
+            }
+            if (alarms_ != nullptr && alarms_->IsRinging()) {
+                alarms_->Dismiss();  // Astral Boy: desliga o alarme
+                return;
+            }
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
+            if (pet_ != nullptr && app.GetDeviceState() == kDeviceStateIdle && !pet_->TryConversation()) {
+                return;  // desmaiado ou bolado: não abre a conversa
+            }
             app.ToggleChatState();
+        });
+        // Astral Boy: cuidados do tamagotchi pelo mesmo botão (ou soneca/desligar alarme)
+        boot_button_.OnDoubleClick([this]() {
+            if (game_ != nullptr && game_->IsActive()) {
+                return;
+            }
+            if (alarms_ != nullptr && alarms_->IsRinging()) {
+                alarms_->Snooze();
+                return;
+            }
+            // Comer só jogando: abre a "Hora do Lanche" (também funciona desmaiado).
+            if (game_ != nullptr && Application::GetInstance().GetDeviceState() == kDeviceStateIdle) {
+                game_->StartSnack();
+            }
+        });
+        // Astral Boy: 3 cliques = Caça-Estrelas (o botão espera acabar os cliques, não abre o Lanche junto)
+        boot_button_.OnMultipleClick([this]() {
+            if (game_ != nullptr && !game_->IsActive() &&
+                Application::GetInstance().GetDeviceState() == kDeviceStateIdle) {
+                game_->StartStars();
+            }
+        }, 3);
+        boot_button_.OnLongPress([this]() {
+            if (game_ != nullptr && game_->IsActive()) {
+                game_->Quit();  // segurar sai do jogo
+                return;
+            }
+            if (alarms_ != nullptr && alarms_->IsRinging()) {
+                alarms_->Dismiss();
+                return;
+            }
+            if (pet_ != nullptr) {
+                pet_->Cuddle();
+            }
         });
     }
 
     // 物联网初始化，添加对 AI 可见设备
     void InitializeTools() {
-        static LampController lamp(LAMP_GPIO);
+        // Astral Boy: a "lâmpada" de teste foi removida; o servidor aceita no máximo 32 ferramentas.
     }
 
 public:
@@ -145,6 +206,12 @@ public:
         InitializeLcdDisplay();
         InitializeButtons();
         InitializeTools();
+        AstralClock::Init();
+        pet_ = new AstralPet(static_cast<AstralLcdDisplay*>(display_));
+        auto radio = new AstralRadio();
+        alarms_ = new AstralAlarms(radio, static_cast<AstralLcdDisplay*>(display_));
+        new AstralWeb();
+        game_ = new AstralGame(static_cast<AstralLcdDisplay*>(display_), pet_, radio);
         if (DISPLAY_BACKLIGHT_PIN != GPIO_NUM_NC) {
             GetBacklight()->RestoreBrightness();
         }

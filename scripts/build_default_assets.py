@@ -856,7 +856,11 @@ def get_emoji_collection_path(default_emoji_collection, noto_fonts_path, project
     """
     if not default_emoji_collection:
         return None
-    
+
+    # Astral Boy: a folder path is used as-is, so custom GIF/PNG sets can live outside the repo
+    if os.path.isdir(default_emoji_collection):
+        return default_emoji_collection
+
     # Special handling for otto-gif collection
     if default_emoji_collection == 'otto-gif':
         if project_root:
@@ -965,6 +969,7 @@ def main():
     parser.add_argument('--sdkconfig', required=True, help='Path to sdkconfig file')
     parser.add_argument('--builtin_text_font', help='Builtin text font name (e.g., font_noto_sans_basic_16_4)')
     parser.add_argument('--emoji_collection', help='Default emoji collection name (e.g., noto-color-emoji_32)')
+    parser.add_argument('--text_font_file', help='CBIN text font to package instead of the Noto common font')
     parser.add_argument('--output', required=True, help='Output path for assets.bin')
     parser.add_argument('--esp_sr_model_path', help='Path to ESP-SR model directory')
     parser.add_argument('--noto_fonts_path', help='Path to noto-fonts component directory')
@@ -1036,7 +1041,10 @@ def main():
         print(f"  multinet models: {', '.join(multinet_model_names)} (will be packaged)")
     
     # Get text font path if needed
-    text_font_path = get_text_font_path(args.builtin_text_font, args.noto_fonts_path)
+    if args.text_font_file and os.path.isfile(args.text_font_file):
+        text_font_path = args.text_font_file
+    else:
+        text_font_path = get_text_font_path(args.builtin_text_font, args.noto_fonts_path)
     font_bundle_id = None
     if text_font_path:
         manifest_path = os.path.join(args.noto_fonts_path, "manifest.json")

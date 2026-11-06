@@ -13,6 +13,7 @@
 #include <functional>
 #include <cstdint>
 #include <vector>
+#include <atomic>
 
 #include "protocol.h"
 #include "ota.h"
@@ -69,6 +70,14 @@ public:
     void Run();
 
     DeviceState GetDeviceState() const { return state_machine_.GetState(); }
+
+    // Astral Boy: mantém a palavra de ativação desligada ao entrar em repouso (minigames)
+    void SetWakeWordSuppressed(bool suppressed) { wake_word_suppressed_ = suppressed; }
+    // Astral Boy: chamado (na tarefa principal) quando o "hey boy" tenta abrir uma conversa;
+    // devolver false impede a conversa (ex.: bichinho desmaiado).
+    void SetConversationGate(std::function<bool()> gate) { conversation_gate_ = std::move(gate); }
+    // Astral Boy: recebe (na tarefa principal) a emoção de cada resposta da IA.
+    void SetEmotionListener(std::function<void(const std::string&)> fn) { emotion_listener_ = std::move(fn); }
     bool IsVoiceDetected() const { return audio_service_.IsVoiceDetected(); }
     
     /**
@@ -157,6 +166,12 @@ private:
     bool pending_listening_start_ = false;  // Waiting for playback to drain before starting listening (auto mode)
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
+    std::atomic<bool> wake_word_suppressed_{false};
+    std::function<bool()> conversation_gate_;
+    std::atomic<int64_t> listen_activity_us_{0};  // Astral Boy: última fala/mensagem enquanto escuta
+    static constexpr int kListenTimeoutSeconds = 10;
+    static constexpr int kListenMaxSeconds = 25;  // mesmo com "voz" (barulho) não passa disso
+    std::function<void(const std::string&)> emotion_listener_;
 
 
     // Event handlers
