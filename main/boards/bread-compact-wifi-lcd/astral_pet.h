@@ -361,7 +361,10 @@ private:
             return;  // tenta de novo no próximo minuto (até o fim da hora)
         }
         done_day = tm_now.tm_yday;
-        bool lunch = hour == 12;
+        MealReminder(hour == 12);
+    }
+
+    void MealReminder(bool lunch) {
         ESP_LOGI("AstralPet", "Hora do %s: puxando conversa", lunch ? "almoco" : "jantar");
         React("delicious", lunch ? "Hora do almoço!" : "Hora do jantar!", 5);
         std::string prompt = std::string("[Aviso automatico do Astral Boy, nao e fala do dono] E hora do ") +
@@ -431,6 +434,7 @@ private:
     bool lonely_ = false;            // saudade: horas sem ninguém
     int64_t last_interaction_us_ = 0;
     int64_t welcomed_back_us_ = -60 * 60 * 1000000LL;
+    std::string pending_test_;       // modo teste: reação que roda quando a conversa fechar
     int lunch_day_ = -1;             // dia do ano em que já avisou do almoço / jantar
     int dinner_day_ = -1;
     bool close_after_reply_ = false;  // modo teste: encerrar a conversa depois da resposta
@@ -606,6 +610,9 @@ private:
                 close_after_reply_ = false;
                 app.ToggleChatState();
             }
+        }
+        if (!pending_test_.empty() && state == kDeviceStateIdle && !close_after_reply_) {
+            RunPendingTest();
         }
         if (!fainted_ && sleeping_ && (state == kDeviceStateListening || state == kDeviceStateSpeaking)) {
             sleeping_ = false;
@@ -1006,23 +1013,48 @@ private:
         // Modo de teste do dono: põe o bichinho num estado na hora (para ver rostos e reações).
         mcp.AddTool("self.pet.test",
                     "MODO TESTE do dono. Use SOMENTE quando o dono disser 'modo teste' seguido do estado. "
-                    "estado: 'desmaiar' (saude 0, desmaia), 'faminto' (fome 10), 'cheio' (fome 100), "
-                    "'cansado' (energia 10), 'bolado' (humor 10), 'doente' (saude 15), 'enjoado' (enjoo por "
-                    "1 minuto), 'normal' (tudo em 80, acorda). Depois responda so 'Modo teste: <estado>.'",
+                    "estado (uma palavra, sem acento): 'desmaiar', 'faminto', 'cheio', 'cansado', 'bolado', "
+                    "'doente', 'enjoado', 'saudade', 'volta', 'susto', 'musica', 'chuva', 'frio', 'sol', "
+                    "'semclima', 'almoco', 'jantar', 'normal'. Depois responda so 'Modo teste: <estado>.'",
                     PropertyList({Property("estado", kPropertyTypeString)}),
                     [this](const PropertyList& p) -> ReturnValue { return SetTestState(p["estado"].value<std::string>()); });
+    }
+
+    // Testes que precisam dele parado (rosto) ou que abrem conversa: rodam quando ela fecha.
+    void RunPendingTest() {
+        std::string test = pending_test_;
+        pending_test_.clear();
+        ESP_LOGW("AstralPet", "MODO TESTE (agora): %s", test.c_str());
+        if (test == "volta") {
+            lonely_ = true;
+            NoteInteraction(true);
+        } else if (test == "susto") {
+            React("shocked", "Ai! Que susto!", 3);
+            StartleSound();
+        } else if (test == "musica") {
+            dance_until_us_ = esp_timer_get_time() + 15 * 1000000LL;
+            Board::GetInstance().GetDisplay()->ShowNotification("Que som!", 3000);
+            shown_while_idle_ = false;
+        } else if (test == "almoco" || test == "jantar") {
+            MealReminder(test == "almoco");
+        }
     }
 
     // Roda na tarefa principal (ferramenta MCP): pode mexer no estado e gravar direto.
     std::string SetTestState(const std::string& state) {
         ESP_LOGW("AstralPet", "MODO TESTE: %s", state.c_str());
         // Cada estado de teste começa do normal, para um teste não misturar com o anterior.
-        if (state == "faminto" || state == "cheio" || state == "cansado" || state == "bolado" ||
-            state == "doente") {
+        bool from_normal = state == "faminto" || state == "cheio" || state == "cansado" || state == "bolado" ||
+                           state == "doente" || state == "saudade" || state == "volta" || state == "susto" ||
+                           state == "musica" || state == "chuva" || state == "frio" || state == "sol" ||
+                           state == "semclima";
+        if (from_normal || state == "normal") {
             hunger_ = energy_ = mood_ = health_ = 80;
             fainted_ = false;
             sleeping_ = false;
             nausea_until_us_ = 0;
+            lonely_ = false;
+            dance_until_us_ = 0;
             UpdateBalloon(false);
         }
         if (state == "desmaiar") {
@@ -1043,11 +1075,20 @@ private:
         } else if (state == "enjoado") {
             MakeNauseous(60);
         } else if (state == "normal") {
-            hunger_ = energy_ = mood_ = health_ = 80;
-            fainted_ = false;
-            sleeping_ = false;
-            nausea_until_us_ = 0;
-            UpdateBalloon(false);
+            // já voltou tudo ao normal acima
+        } else if (state == "saudade") {
+            lonely_ = true;
+        } else if (state == "chuva") {
+            weather_ = kWeatherRain;  // até a próxima consulta do clima (30 min)
+        } else if (state == "frio") {
+            weather_ = kWeatherCold;
+        } else if (state == "sol") {
+            weather_ = kWeatherSun;
+        } else if (state == "semclima") {
+            weather_ = kWeatherNone;
+        } else if (state == "volta" || state == "susto" || state == "musica" || state == "almoco" ||
+                   state == "jantar") {
+            pending_test_ = state;  // acontece quando a conversa fechar
         } else {
             return "{\"ok\":false,\"erro\":\"estado desconhecido\"}";
         }

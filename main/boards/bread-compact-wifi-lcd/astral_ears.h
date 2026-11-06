@@ -32,10 +32,10 @@ private:
     static constexpr int kAnalyzeEvery = 50;       // analisa a música a cada 0,5 s
     static constexpr float kStartleRatio = 8.0f;   // susto: pico 8x acima do fundo...
     static constexpr float kStartleMin = 2500.0f;  // ...e acima deste volume absoluto
-    static constexpr float kMusicLoudRatio = 2.5f; // música: volume acima de 2,5x o fundo...
+    static constexpr float kMusicLoudRatio = 1.8f; // música: volume acima de 1,8x o fundo quieto...
     static constexpr float kMusicMin = 300.0f;     // ...e acima deste volume absoluto
-    static constexpr float kMusicLoudFrac = 0.85f; // ...em 85% do tempo
-    static constexpr float kMusicBeat = 0.30f;     // força mínima da batida (autocorrelação)
+    static constexpr float kMusicLoudFrac = 0.70f; // ...em 70% do tempo
+    static constexpr float kMusicBeat = 0.25f;     // força mínima da batida (autocorrelação)
 
     AstralPet* pet_;
     std::vector<float> env_;
@@ -44,6 +44,7 @@ private:
     float floor_ = 150.0f;  // barulho de fundo (média lenta)
     float peak_log_ = 0;
     float beat_log_ = 0;
+    float loud_log_ = 0;
     int music_hits_ = 0;
     int music_misses_ = 0;
     bool music_ = false;
@@ -79,7 +80,7 @@ private:
         peak_log_ = std::max(peak_log_, rms);
 
         // o fundo acompanha rápido quando o som cai e bem devagar quando sobe
-        floor_ += (rms - floor_) * (rms < floor_ ? 0.01f : 0.0005f);
+        floor_ += (rms - floor_) * (rms < floor_ ? 0.01f : 0.00002f);
         floor_ = std::max(floor_, 30.0f);
 
         auto& app = Application::GetInstance();
@@ -87,7 +88,7 @@ private:
 
         int64_t now_us = esp_timer_get_time();
         if (frames_ > kWindow && quiet_speaker && rms > kStartleMin && rms > floor_ * kStartleRatio &&
-            recent < floor_ * 3.0f && now_us - last_startle_us_ > 20 * 1000000LL) {
+            recent < floor_ * 3.0f && !music_ && now_us - last_startle_us_ > 20 * 1000000LL) {
             last_startle_us_ = now_us;
             ESP_LOGI(TAG, "Susto! volume %d (fundo %d)", static_cast<int>(rms), static_cast<int>(floor_));
             pet_->OnLoudNoise();
@@ -97,8 +98,8 @@ private:
             AnalyzeMusic();
         }
         if (frames_ % 1000 == 0) {  // a cada 10 s: números para calibrar
-            ESP_LOGI(TAG, "Ouvidos: fundo %d, pico %d, batida %.2f, musica %d", static_cast<int>(floor_),
-                     static_cast<int>(peak_log_), beat_log_, music_);
+            ESP_LOGI(TAG, "Ouvidos: fundo %d, pico %d, alto %d%%, batida %.2f, musica %d", static_cast<int>(floor_),
+                     static_cast<int>(peak_log_), static_cast<int>(loud_log_ * 100), beat_log_, music_);
             peak_log_ = 0;
         }
     }
@@ -119,7 +120,7 @@ private:
         float loud_frac = static_cast<float>(loud) / kWindow;
 
         float beat = 0;
-        if (loud_frac >= kMusicLoudFrac) {
+        if (mean > loud_level) {  // calcula a batida sempre que tem som (o log ajuda a calibrar)
             // autocorrelação do volume (sem a média) para atrasos de 0,3 a 0,8 s
             float r0 = 0;
             for (int i = 0; i < kWindow; i++) {
@@ -137,6 +138,7 @@ private:
             }
         }
         beat_log_ = beat;
+        loud_log_ = loud_frac;
 
         bool looks_like_music = loud_frac >= kMusicLoudFrac && beat >= kMusicBeat;
         if (looks_like_music) {
