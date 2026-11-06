@@ -391,6 +391,7 @@ private:
                  static_cast<int>(Application::GetInstance().GetDeviceState()));
         dance_until_us_ = esp_timer_get_time() + seconds * 1000000LL;
         shown_while_idle_ = false;
+        Board::GetInstance().GetDisplay()->SetEmotion("headbang");  // na hora, junto com a música
         mood_ = Clamp(mood_ + 2);
         NoteInteraction(false);
         Board::GetInstance().GetDisplay()->ShowNotification("Olha eu dançando!", 3000);
@@ -657,7 +658,10 @@ private:
             return;  // minigame no controle do rosto
         }
         std::string wanted = now_us < react_until_us_ ? react_emotion_ : NeedEmotion();
-        if (!shown_while_idle_ || wanted != shown_emotion_) {
+        // Confere o rosto que está DE VERDADE na tela: o XiaoZhi põe "neutral" sozinho logo depois
+        // que a conversa fecha, e isso apagava a reação que acabou de ser mostrada.
+        bool screen_differs = panel_display_ != nullptr && panel_display_->CurrentEmotion() != wanted;
+        if (!shown_while_idle_ || wanted != shown_emotion_ || screen_differs) {
             auto display = Board::GetInstance().GetDisplay();
             if (display != nullptr) {
                 display->SetEmotion(wanted.c_str());

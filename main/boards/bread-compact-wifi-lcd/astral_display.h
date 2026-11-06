@@ -8,6 +8,7 @@
 #include <utility>
 #include <string>
 #include <atomic>
+#include <mutex>
 
 LV_FONT_DECLARE(font_astral_digits_72);
 LV_IMAGE_DECLARE(astral_icon_food);
@@ -140,7 +141,17 @@ public:
 
     // Telas do sistema (ligando, configurando Wi-Fi, ativando, erro) usam ícones genéricos: troca pelos
     // rostos do Astral Boy. Se o rosto ainda não carregou (bem no começo do boot), usa o ícone mesmo.
+    // Último rosto pedido para a tela (por qualquer um: Astral Boy, XiaoZhi ou a IA).
+    std::string CurrentEmotion() {
+        std::lock_guard<std::mutex> lock(emotion_mutex_);
+        return current_emotion_;
+    }
+
     bool SetEmotion(const char* emotion) override {
+        {
+            std::lock_guard<std::mutex> lock(emotion_mutex_);
+            current_emotion_ = emotion != nullptr ? emotion : "";
+        }
         static const std::pair<const char*, const char*> kSystemFaces[] = {
             {"gear", "thinking"},          // configurando Wi-Fi
             {"link", "winking"},           // ativação no xiaozhi.me
@@ -174,6 +185,8 @@ private:
     static constexpr int kBarWidth = 30;
     static constexpr int kPetPanelReserve = 26;  // espaço do painel do tamagotchi embaixo da tela
 
+    std::mutex emotion_mutex_;
+    std::string current_emotion_;
     lv_obj_t* big_clock_ = nullptr;
     lv_obj_t* big_clock_label_ = nullptr;
     std::atomic<bool> game_mode_{false};
