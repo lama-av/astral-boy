@@ -111,7 +111,7 @@ private:
                 }
                 tail /= 4;
                 candidate_frames_ = 0;
-                if (tail < candidate_peak_ * 0.25f) {
+                if (tail < candidate_peak_ * 0.30f) {
                     last_startle_us_ = now_us;
                     ESP_LOGI(TAG, "Susto! volume %d (antes %d, depois %d)", static_cast<int>(candidate_peak_),
                              static_cast<int>(candidate_before_), static_cast<int>(tail));
