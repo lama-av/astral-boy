@@ -559,10 +559,10 @@ private:
         if (esp_timer_get_time() < nausea_until_us_) return "nauseous";  // comeu demais
         if (sleeping_) return "sleepy";
         if (health_ < kRed) return "sick";                    // doentinho: febre e termômetro
+        if (IsNight()) return "sleepy";                       // 22h às 6h: sempre com sono
         if (mood_ < kRed) return "angry";                     // vermelho: bolado
         if (energy_ < kRed) return "sleepy";                  // cansado: carinha de sono
         if (hunger_ < kRed) return "angry";                   // faminto: bravo
-        if (IsNight() && energy_ < 60) return "sleepy";  // de noite fica sonolento
         if (hunger_ >= 95) return "delicious";                // barriga cheia: satisfeito
         if (mood_ < 45) return "embarrassed";                 // amarelo baixo: meio chateado
         if (mood_ < kYellow) return "neutral";                // amarelo: neutro
@@ -591,7 +591,7 @@ private:
         if (health_ < kRed) message = "Tô doentinho...";
         else if (hunger_ < kRed) message = mood_ < 45 ? "Tô com fome! Hmpf!" : "Tô com fome...";
         else if (energy_ < kRed) message = "Tô cansado...";
-        else if (IsNight() && energy_ < 60) message = "Tá tarde... tô com sono.";
+        else if (IsNight()) message = "Tá tarde... tô com sono.";
         else if (mood_ < 20) message = "Hmpf... tô irritado.";
         else if (mood_ < 40) message = "Brinca comigo?";
         if (message == nullptr) return;
@@ -704,11 +704,11 @@ private:
     }
     static bool IsNight() {
         int h = LocalHour();
-        return h >= 0 && (h >= 22 || h < 7);
+        return h >= 0 && (h >= 22 || h < 6);  // noite: 22h às 6h
     }
     static bool IsMorning() {
         int h = LocalHour();
-        return h >= 7 && h < 11;
+        return h >= 6 && h < 11;
     }
 
     // Emoção da resposta da IA: conversa alegre sobe o humor devagar, conversa triste desce um pouco.
@@ -744,7 +744,7 @@ private:
             else if (hunger_ < kYellow) how += " Voce esta com um pouco de fome; pode comentar.";
             if (sleeping_) how += " Voce estava dormindo e acordou meio grogue.";
             else if (energy_ < kRed) how += " Voce esta exausto: boceje e diga que precisa dormir.";
-            else if (IsNight() && energy_ < 60) how += " Ja e tarde e voce esta sonolento.";
+            else if (IsNight()) how += " Ja e tarde (22h-6h) e voce esta com sono: boceje e fale baixinho.";
             if (health_ < kRed) how += " Voce esta doentinho e fraco.";
             if (esp_timer_get_time() < nausea_until_us_) how += " Voce comeu demais e esta enjoado.";
         }
