@@ -42,12 +42,13 @@ public:
         if (rate <= 0) {
             return;
         }
-        const float notes[] = {72, 76, 79, 84, 88, 91};  // Dó Mi Sol Dó Mi Sol, subindo
+        // Dó Mi Sol, Mi Sol, Dó agudo longo (resolve na tônica, sem nota solta no fim)
+        const float notes[] = {72, 76, 79, 76, 79, 84};
+        const float secs[] = {0.12f, 0.12f, 0.16f, 0.12f, 0.16f, 0.55f};
         std::vector<int16_t> pcm;
         for (int i = 0; i < 6; i++) {
-            AddNote(pcm, rate, Midi(notes[i]), i == 5 ? 0.45f : 0.1f, i == 5 ? 3600.0f : 4000.0f);
+            AddNote(pcm, rate, Midi(notes[i]), secs[i], 4000.0f);
         }
-        AddNote(pcm, rate, Midi(96), 0.22f, 1500.0f);  // brilho
         Push(std::move(pcm));
     }
 
