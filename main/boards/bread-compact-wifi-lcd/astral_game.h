@@ -258,7 +258,7 @@ private:
             float env = std::exp(-7.0f * t) * std::min(1.0f, i / (rate * 0.004f));
             float v = std::sin(2 * static_cast<float>(M_PI) * hz * t) + 0.45f * std::sin(2 * static_cast<float>(M_PI) * hz * 2.76f * t) +
                       0.2f * std::sin(2 * static_cast<float>(M_PI) * hz * 5.4f * t);
-            pcm[i] = static_cast<int16_t>(v * 4200.0f * env);
+            pcm[i] = static_cast<int16_t>(std::clamp(v * 6500.0f * env, -32000.0f, 32000.0f));  // bem audível por cima da música
         }
         AstralMusic::Play(std::move(pcm));  // mistura na música de fundo, se tocando
     }
@@ -627,9 +627,7 @@ private:
             if (!pressed) {
                 if (has_star) {
                     lives--;  // deixou a estrela fugir: perde 1 vida (senão o jogo nunca acaba)
-                    Tone(392.0f, 170, 4500.0f);  // estrela fugiu: tan-tan-taaan
-                    Tone(330.0f, 170, 4500.0f);
-                    Tone(262.0f, 380, 4500.0f);
+                    Buzz();  // deixou a estrela fugir: bzzzz (igual a errar)
                     char hud[16];
                     snprintf(hud, sizeof(hud), "%d", counted);
                     UpdateHud(hud, lives);

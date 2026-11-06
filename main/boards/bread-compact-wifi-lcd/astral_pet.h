@@ -164,13 +164,13 @@ public:
                 sleeping_ = false;
             }
             bool welcomed = NoteInteraction(true);
-            // Carinho demais irrita: 4 em 20 s = "chega!"
+            // Carinho demais irrita: 3 em 15 s = "chega!"
             int64_t now_us = esp_timer_get_time();
-            if (now_us - cuddle_window_us_ > 20 * 1000000LL) {
+            if (now_us - cuddle_window_us_ > 15 * 1000000LL) {
                 cuddle_window_us_ = now_us;
                 cuddle_count_ = 0;
             }
-            if (++cuddle_count_ >= 4 && !welcomed && mood_ >= kRed) {
+            if (++cuddle_count_ >= 3 && !welcomed && mood_ >= kRed) {
                 cuddle_count_ = 0;
                 mood_ = Clamp(mood_ - 3);
                 ESP_LOGI("AstralPet", "Carinho demais");
