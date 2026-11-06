@@ -4,6 +4,8 @@
 #include "display/lcd_display.h"
 
 #include <cstring>
+#include <ctime>
+#include <cstdio>
 #include <initializer_list>
 #include <utility>
 #include <string>
@@ -131,6 +133,7 @@ public:
 
     void SetupUI() override {
         SpiLcdDisplay::SetupUI();
+        SetupTopBar();
         ApplyAstralStyle();
     }
 
@@ -194,6 +197,58 @@ private:
     lv_obj_t* balloon_label_ = nullptr;
     lv_obj_t* pet_panel_ = nullptr;
     lv_obj_t* pet_fill_[4] = {};
+    lv_obj_t* date_label_ = nullptr;
+
+    // Barra do topo: [Wi-Fi + bateria] ...relógio... [data]. A bateria é o ícone nativo do XiaoZhi:
+    // aparece sozinha quando a placa souber medir a bateria (GetBatteryLevel).
+    void SetupTopBar() {
+        DisplayLockGuard lock(this);
+        if (top_bar_ == nullptr || network_label_ == nullptr || battery_label_ == nullptr) {
+            return;
+        }
+        lv_obj_t* right_icons = lv_obj_get_parent(battery_label_);
+
+        lv_obj_t* left = lv_obj_create(top_bar_);
+        lv_obj_set_size(left, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_set_style_bg_opa(left, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(left, 0, 0);
+        lv_obj_set_style_pad_all(left, 0, 0);
+        lv_obj_set_flex_flow(left, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(left, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_scrollbar_mode(left, LV_SCROLLBAR_MODE_OFF);
+        lv_obj_set_parent(network_label_, left);
+        lv_obj_set_parent(battery_label_, left);  // bateria ao lado do Wi-Fi
+        lv_obj_move_to_index(left, 0);
+
+        // data no canto direito, na mesma fonte do relógio
+        date_label_ = lv_label_create(right_icons);
+        lv_label_set_text(date_label_, "");
+        lv_obj_set_style_margin_left(date_label_, 4, 0);
+        UpdateDate();
+        lv_timer_create([](lv_timer_t* t) {
+            static_cast<AstralLcdDisplay*>(lv_timer_get_user_data(t))->UpdateDate();
+        }, 20000, this);
+    }
+
+    // Chamada pelo timer do LVGL (já com a tela travada).
+    void UpdateDate() {
+        if (date_label_ == nullptr) {
+            return;
+        }
+        time_t now = time(nullptr);
+        struct tm tm_now;
+        localtime_r(&now, &tm_now);
+        if (tm_now.tm_year + 1900 < 2025) {  // relógio ainda não acertado pela internet
+            lv_label_set_text(date_label_, "");
+            return;
+        }
+        static const char* kDays[] = {"Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"};
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%s %d", kDays[tm_now.tm_wday], tm_now.tm_mday);
+        if (strcmp(lv_label_get_text(date_label_), buf) != 0) {
+            lv_label_set_text(date_label_, buf);
+        }
+    }
 
     static lv_obj_t* PlainBox(lv_obj_t* parent) {
         lv_obj_t* obj = lv_obj_create(parent);
@@ -263,7 +318,7 @@ private:
             lv_obj_align(bottom_bar_, LV_ALIGN_BOTTOM_MID, 0, -kPetPanelReserve);
         }
         for (lv_obj_t* label : {network_label_, status_label_, notification_label_, mute_label_,
-                                battery_label_, chat_message_label_}) {
+                                battery_label_, chat_message_label_, date_label_}) {
             if (label != nullptr) {
                 lv_obj_set_style_text_color(label, ink, 0);
             }
