@@ -30,8 +30,8 @@ private:
     static constexpr const char* TAG = "AstralEars";
     static constexpr int kWindow = 600;            // 6 s de volumes (10 ms cada)
     static constexpr int kAnalyzeEvery = 50;       // analisa a música a cada 0,5 s
-    static constexpr float kStartleRatio = 4.0f;   // susto: volume pula 4x acima do último meio segundo...
-    static constexpr float kStartleMin = 1800.0f;  // ...e acima deste volume absoluto
+    static constexpr float kStartleRatio = 4.5f;   // susto: volume pula 4,5x acima do último meio segundo...
+    static constexpr float kStartleMin = 4000.0f;  // ...e acima deste volume absoluto
     static constexpr float kMusicLoudRatio = 2.2f; // música: volume acima de 2,2x o fundo quieto...
     static constexpr float kMusicMin = 900.0f;     // ...e acima deste volume absoluto
     static constexpr float kMusicLoudFrac = 0.65f; // ...em 65% do tempo
@@ -87,7 +87,7 @@ private:
         int64_t now_us = esp_timer_get_time();
         // susto = salto repentino em relação ao meio segundo anterior (não depende do fundo)
         if (frames_ > 100 && quiet_speaker && rms > kStartleMin && rms > recent * kStartleRatio && !music_ &&
-            now_us - last_music_us_ > 5 * 1000000LL && now_us - last_startle_us_ > 15 * 1000000LL) {
+            now_us - last_music_us_ > 5 * 1000000LL && now_us - last_startle_us_ > 30 * 1000000LL) {
             last_startle_us_ = now_us;
             ESP_LOGI(TAG, "Susto! volume %d (antes %d)", static_cast<int>(rms), static_cast<int>(recent));
             pet_->OnLoudNoise();

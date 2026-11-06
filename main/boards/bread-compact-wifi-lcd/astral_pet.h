@@ -367,14 +367,8 @@ private:
     void MealReminder(bool lunch) {
         ESP_LOGI("AstralPet", "Hora do %s: puxando conversa", lunch ? "almoco" : "jantar");
         React("delicious", lunch ? "Hora do almoço!" : "Hora do jantar!", 5);
-        std::string prompt = std::string("[Aviso automatico do Astral Boy, nao e fala do dono] E hora do ") +
-                             (lunch ? "almoco" : "jantar") +
-                             ". Puxe assunto de forma curta e carinhosa: pergunte se o dono ja comeu ou se esta "
-                             "com fome e lembre que ele precisa se alimentar bem.";
-        if (hunger_ < kYellow) {
-            prompt += " Diga tambem que voce esta com fome e peca o jogo do lanche (2 cliques no botao).";
-        }
-        Application::GetInstance().WakeWordInvoke(prompt);
+        // O servidor só aceita frase curta aqui; o que fazer com ela está na descrição do self.pet.mood.
+        Application::GetInstance().WakeWordInvoke(lunch ? "hora do almoço" : "hora do jantar");
     }
 
     // "Iiih!": gritinho rápido subindo (susto).
@@ -434,6 +428,8 @@ private:
     bool lonely_ = false;            // saudade: horas sem ninguém
     int64_t last_interaction_us_ = 0;
     int64_t welcomed_back_us_ = -60 * 60 * 1000000LL;
+    std::string test_face_;          // modo teste: rosto forçado
+    int64_t test_face_until_us_ = 0;
     std::string pending_test_;       // modo teste: reação que roda quando a conversa fechar
     int lunch_day_ = -1;             // dia do ano em que já avisou do almoço / jantar
     int dinner_day_ = -1;
@@ -737,6 +733,7 @@ private:
     }
 
     std::string NeedEmotion() const {
+        if (esp_timer_get_time() < test_face_until_us_) return test_face_;  // modo teste: rosto forçado
         if (fainted_) return "fainted";                       // desmaiado: olhos X X
         if (esp_timer_get_time() < nausea_until_us_) return "nauseous";  // comeu demais
         if (sleeping_) return "sleepy";
@@ -942,7 +939,7 @@ private:
             else if (weather_ == kWeatherSun) how += " Esta sol la fora.";
             if (esp_timer_get_time() < nausea_until_us_) how += " Voce comeu demais e esta enjoado.";
         }
-        char buf[1400];
+        char buf[1800];
         snprintf(buf, sizeof(buf),
                  "Seu humor (0-100) e a sua PACIENCIA e muda com o jeito que te tratam. OBRIGATORIO: na "
                  "PRIMEIRA fala de cada conversa nova, chame esta ferramenta com evento='checar' antes de "
@@ -954,6 +951,10 @@ private:
                  "que discorda de verdade (evento='desagrado'); pedir desculpas (evento='desculpa'); te elogiar "
                  "ou agradecer com carinho (evento='elogio'); disser que gosta de voce ou a conversa estiver "
                  "muito divertida (evento='conversa_boa'). Na duvida entre grosseria e ofensa, use ofensa. "
+                 "Se a conversa comecar so com 'hora do almoço' ou 'hora do jantar', e um LEMBRETE AUTOMATICO "
+                 "seu (nao foi o dono que falou): pergunte de forma curta e carinhosa se o dono ja comeu ou "
+                 "esta com fome e lembre de se alimentar bem; se voce estiver com fome, peca o jogo do lanche "
+                 "(2 cliques no botao). "
                  "ESTADO ATUAL: humor %d (%s), fome %d (%s), energia %d (%s), saude %d (%s). COMO AGIR: %s",
                  static_cast<int>(mood_), MoodText(mood_), static_cast<int>(hunger_), HungerText(hunger_),
                  static_cast<int>(energy_), EnergyText(energy_), static_cast<int>(health_), HealthText(health_),
@@ -1020,6 +1021,13 @@ private:
                     [this](const PropertyList& p) -> ReturnValue { return SetTestState(p["estado"].value<std::string>()); });
     }
 
+    // Mostra o rosto do teste por 20 s (a partir de quando a conversa fechar), passando na frente
+    // de tudo, até da cara de sono da noite.
+    void ForceTestFace(const char* face) {
+        test_face_ = face;
+        test_face_until_us_ = esp_timer_get_time() + 40 * 1000000LL;  // ~20 s de conversa + 20 s na tela
+    }
+
     // Testes que precisam dele parado (rosto) ou que abrem conversa: rodam quando ela fecha.
     void RunPendingTest() {
         std::string test = pending_test_;
@@ -1078,12 +1086,16 @@ private:
             // já voltou tudo ao normal acima
         } else if (state == "saudade") {
             lonely_ = true;
+            ForceTestFace("lonely");
         } else if (state == "chuva") {
             weather_ = kWeatherRain;  // até a próxima consulta do clima (30 min)
+            ForceTestFace("rainy");
         } else if (state == "frio") {
             weather_ = kWeatherCold;
+            ForceTestFace("cold");
         } else if (state == "sol") {
             weather_ = kWeatherSun;
+            ForceTestFace("cool");
         } else if (state == "semclima") {
             weather_ = kWeatherNone;
         } else if (state == "volta" || state == "susto" || state == "musica" || state == "almoco" ||
