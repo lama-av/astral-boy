@@ -50,7 +50,7 @@ public:
                     PlayDanceSong();
                     playing() = false;
                 }
-            }, "astral_dance", 6 * 1024, nullptr, 3, &task, 1, MALLOC_CAP_SPIRAM);
+            }, "astral_dance", 6 * 1024, nullptr, 1, &task, 0, MALLOC_CAP_SPIRAM);  // prioridade baixa: a tela vem antes
         }
         xTaskNotifyGive(task);
         return kBars * 4 * 60 / kBpm + 1;
@@ -71,6 +71,21 @@ private:
     }
 
     static float Midi(float n) { return 440.0f * std::pow(2.0f, (n - 69) / 12.0f); }
+
+    // Seno por tabela (fase em ciclos, 0..1): bem mais leve que std::sin a cada amostra.
+    static float Sin(float cycles) {
+        static float table[1024];
+        static bool ready = false;
+        if (!ready) {
+            for (int i = 0; i < 1024; i++) {
+                table[i] = std::sin(2 * static_cast<float>(M_PI) * i / 1024);
+            }
+            ready = true;
+        }
+        cycles -= static_cast<int>(cycles);
+        if (cycles < 0) cycles += 1;
+        return table[static_cast<int>(cycles * 1024) & 1023];
+    }
 
     static void Push(std::vector<int16_t>&& pcm) {
         Application::GetInstance().GetAudioService().PushPcmToPlaybackQueue(std::move(pcm), 2000);
@@ -100,7 +115,7 @@ private:
             {76, 79, 84, 79}, {81, 84, 88, 84}, {86, 83, 79, 77}, {84, 79, 84, 0}};
         const int bass[kBars] = {48, 45, 50, 43, 48, 45, 43, 48};
         int beat_len = rate * 60 / kBpm;
-        float lead_phase = 0, bass_phase = 0, hat_prev = 0;
+        float lead_phase = 0, bass_phase = 0, kick_phase = 0, hat_prev = 0;  // fases em ciclos
         for (int bar = 0; bar < kBars; bar++) {
             for (int beat = 0; beat < 4; beat++) {
                 std::vector<int16_t> pcm(beat_len);
@@ -113,17 +128,20 @@ private:
                     float k = static_cast<float>(i) / beat_len;
                     float v = 0;
                     if (lead_hz > 0) {
-                        lead_phase += 2 * static_cast<float>(M_PI) * lead_hz / rate;
+                        lead_phase += lead_hz / rate;
+                        if (lead_phase >= 1) lead_phase -= 1;
                         float env = std::min(1.0f, i / (rate * 0.004f)) * (1.0f - 0.55f * k);
-                        v += (std::sin(lead_phase) + 0.3f * std::sin(3 * lead_phase)) * 3200.0f * env;
+                        v += (Sin(lead_phase) + 0.3f * Sin(3 * lead_phase)) * 3200.0f * env;
                     }
-                    bass_phase += 2 * static_cast<float>(M_PI) * bass_hz / rate;
+                    bass_phase += bass_hz / rate;
+                    if (bass_phase >= 1) bass_phase -= 1;
                     float bass_env = std::min(1.0f, i / (rate * 0.003f)) * (k < 0.8f ? 1.0f : (1 - k) * 5);
-                    v += std::sin(bass_phase) * 2600.0f * bass_env;
+                    v += Sin(bass_phase) * 2600.0f * bass_env;
                     if (kick && t < 0.12f) {  // bumbo: seno grave descendo
-                        float kh = 120.0f - 600.0f * t;
-                        v += std::sin(2 * static_cast<float>(M_PI) * std::max(kh, 45.0f) * t) * 6000.0f *
-                             std::exp(-25.0f * t);
+                        kick_phase += std::max(120.0f - 600.0f * t, 45.0f) / rate;
+                        v += Sin(kick_phase) * 6000.0f * (1.0f - t / 0.12f) * (1.0f - t / 0.12f);
+                    } else {
+                        kick_phase = 0;
                     }
                     float off = t - (60.0f / kBpm) / 2;  // chimbal no contratempo
                     if (off >= 0 && off < 0.03f) {
@@ -135,6 +153,7 @@ private:
                     pcm[i] = static_cast<int16_t>(std::clamp(v, -32000.0f, 32000.0f));
                 }
                 Push(std::move(pcm));
+                vTaskDelay(1);  // deixa as outras tarefas (tela) respirarem
             }
         }
     }

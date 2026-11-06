@@ -50,6 +50,9 @@ private:
     int music_misses_ = 0;
     bool music_ = false;
     int64_t last_startle_us_ = 0;
+    int candidate_frames_ = 0;   // possível susto sendo conferido (som curto?)
+    float candidate_peak_ = 0;
+    float candidate_before_ = 0;
     int64_t last_music_us_ = -60 * 1000000LL;
 
     void OnFrame(const std::vector<int16_t>& pcm) {
@@ -92,12 +95,32 @@ private:
         bool quiet_speaker = app.GetAudioService().IsPlaybackIdle();  // não se assusta com o próprio som
 
         int64_t now_us = esp_timer_get_time();
-        // susto = salto repentino em relação ao meio segundo anterior (não depende do fundo)
-        if (frames_ > 100 && quiet_speaker && rms > kStartleMin && rms > recent * kStartleRatio && !music_ &&
-            now_us - last_music_us_ > 5 * 1000000LL && now_us - last_startle_us_ > 30 * 1000000LL) {
-            last_startle_us_ = now_us;
-            ESP_LOGI(TAG, "Susto! volume %d (antes %d)", static_cast<int>(rms), static_cast<int>(recent));
-            pet_->OnLoudNoise();
+        // susto = salto repentino em relação ao meio segundo anterior (não depende do fundo)...
+        if (candidate_frames_ == 0 && frames_ > 100 && quiet_speaker && rms > kStartleMin &&
+            rms > recent * kStartleRatio && !music_ && now_us - last_music_us_ > 5 * 1000000LL &&
+            now_us - last_startle_us_ > 30 * 1000000LL) {
+            candidate_frames_ = 1;  // ...que precisa sumir rápido (palma, batida); voz continua alta
+            candidate_peak_ = rms;
+            candidate_before_ = recent;
+        } else if (candidate_frames_ > 0) {
+            candidate_peak_ = std::max(candidate_peak_, rms);
+            if (++candidate_frames_ >= 12) {  // 120 ms depois do pico
+                float tail = 0;
+                for (int k = 1; k <= 4; k++) {
+                    tail += env_[(pos_ - k + kWindow) % kWindow];
+                }
+                tail /= 4;
+                candidate_frames_ = 0;
+                if (tail < candidate_peak_ * 0.25f) {
+                    last_startle_us_ = now_us;
+                    ESP_LOGI(TAG, "Susto! volume %d (antes %d, depois %d)", static_cast<int>(candidate_peak_),
+                             static_cast<int>(candidate_before_), static_cast<int>(tail));
+                    pet_->OnLoudNoise();
+                } else {
+                    ESP_LOGI(TAG, "Som alto mas continuo (voz?): sem susto (pico %d, depois %d)",
+                             static_cast<int>(candidate_peak_), static_cast<int>(tail));
+                }
+            }
         }
 
         if (frames_ % kAnalyzeEvery == 0 && frames_ >= kWindow) {
