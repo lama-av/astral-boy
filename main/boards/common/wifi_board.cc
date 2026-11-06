@@ -189,6 +189,12 @@ void WifiBoard::StartWifiConfigMode() {
     auto &blufi = Blufi::GetInstance();
     // initialize esp-blufi protocol
     blufi.init();
+    // Astral Boy: avisa na tela como configurar pelo celular
+    Application::GetInstance().Schedule([]() {
+        Application::GetInstance().Alert(Lang::Strings::WIFI_CONFIG_MODE,
+                                         "Abra o app EspBlufi no celular e escolha o Astral Boy", "gear",
+                                         Lang::Sounds::OGG_WIFICONFIG);
+    });
 #endif
 }
 
