@@ -140,6 +140,8 @@ private:
         boot_button_.OnPressDown([this]() {
             if (game_ != nullptr && game_->IsActive()) {
                 game_->Press();
+            } else if (pet_ != nullptr) {
+                pet_->OnButtonPress();  // apertar sem parar deixa ele tonto
             }
         });
         boot_button_.OnClick([this]() {

@@ -9,8 +9,10 @@
 #include "display/display.h"
 #include "mcp_server.h"
 #include "settings.h"
+#include "wifi_manager.h"
 
 #include <esp_log.h>
+#include <esp_random.h>
 #include <esp_timer.h>
 
 #include <algorithm>
@@ -18,6 +20,7 @@
 #include <vector>
 #include <atomic>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <functional>
 #include <mutex>
@@ -84,6 +87,24 @@ public:
         });
     }
 
+    // Cada vez que o botão é apertado (fora do jogo). Muitas seguidas = ele fica tonto.
+    void OnButtonPress() {
+        Application::GetInstance().Schedule([this]() {
+            int64_t now_us = esp_timer_get_time();
+            if (now_us - mash_start_us_ > 3 * 1000000LL) {
+                mash_start_us_ = now_us;
+                mash_count_ = 0;
+            }
+            if (++mash_count_ >= 7 && now_us - last_dizzy_us_ > 20 * 1000000LL && !fainted_) {
+                mash_count_ = 0;
+                last_dizzy_us_ = now_us;
+                mood_ = Clamp(mood_ - 2);
+                ESP_LOGI("AstralPet", "Tonto de tanto apertar o botao");
+                React("dizzy", "Para, para... tô tonto!", 6);
+            }
+        });
+    }
+
     // Música tocando no ambiente (AstralEars, a cada 0,5 s enquanto durar): headbang!
     void MusicTick() {
         Application::GetInstance().Schedule([this]() {
@@ -143,6 +164,21 @@ public:
                 sleeping_ = false;
             }
             bool welcomed = NoteInteraction(true);
+            // Carinho demais irrita: 4 em 20 s = "chega!"
+            int64_t now_us = esp_timer_get_time();
+            if (now_us - cuddle_window_us_ > 20 * 1000000LL) {
+                cuddle_window_us_ = now_us;
+                cuddle_count_ = 0;
+            }
+            if (++cuddle_count_ >= 4 && !welcomed && mood_ >= kRed) {
+                cuddle_count_ = 0;
+                mood_ = Clamp(mood_ - 3);
+                ESP_LOGI("AstralPet", "Carinho demais");
+                React("angry", "Chega, chega! Já deu!", 3);
+                UpdatePanel(true);
+                Save();
+                return;
+            }
             bool was_grumpy = mood_ < kRed;
             mood_ = Clamp(mood_ + 6);
             if (was_grumpy) {
@@ -305,6 +341,141 @@ private:
 
     static constexpr int64_t kLonelyUs = 3LL * 3600 * 1000000;  // 3 h sem ninguém = saudade
 
+    // Reação sem texto (animações de espera).
+    void ReactQuiet(const char* emotion, int seconds) {
+        react_emotion_ = emotion;
+        react_until_us_ = esp_timer_get_time() + seconds * 1000000LL;
+        shown_while_idle_ = false;
+    }
+
+    // Vida própria: de vez em quando, parado e tranquilo, ele boceja, olha pros lados ou assobia.
+    void MaybeIdleAnimation(DeviceState state, int64_t now_us) {
+        if (next_idle_anim_us_ == 0) {
+            next_idle_anim_us_ = now_us + 60 * 1000000LL;
+        }
+        if (now_us < next_idle_anim_us_) {
+            return;
+        }
+        next_idle_anim_us_ = now_us + (40 + esp_random() % 51) * 1000000LL;  // a cada 40-90 s
+        if (state != kDeviceStateIdle || paused_.load() || now_us < react_until_us_ ||
+            now_us < dance_until_us_ || now_us < test_face_until_us_ || pomo_phase_ != 0) {
+            return;
+        }
+        std::string base = NeedEmotion();
+        if (base != "happy" && base != "neutral" && base != "embarrassed" && base != "cool" &&
+            base != "delicious") {
+            return;  // com sono, fome, doente, bravo etc. o rosto da necessidade fica
+        }
+        const char* options[3];
+        int n = 0;
+        options[n++] = "looking";
+        if (energy_ < 75) options[n++] = "yawn";
+        if (mood_ >= kYellow) options[n++] = "whistle";
+        const char* pick = options[esp_random() % n];
+        ESP_LOGI("AstralPet", "Vida propria: %s", pick);
+        ReactQuiet(pick, strcmp(pick, "looking") == 0 ? 4 : 3);
+    }
+
+    // Internet: sem Wi-Fi = cara confusa e "Cadê a internet?"; no hotspot do iPhone = passeando.
+    void CheckNetwork(DeviceState state, int64_t now_us) {
+        auto& wifi = WifiManager::GetInstance();
+        if (!wifi.IsInitialized() || wifi.IsConfigMode()) {
+            return;
+        }
+        bool connected = wifi.IsConnected();
+        if (!connected) {
+            if (offline_since_us_ == 0) {
+                offline_since_us_ = now_us;
+            }
+            if (!offline_ && now_us - offline_since_us_ > 15 * 1000000LL) {
+                offline_ = true;
+                ESP_LOGI("AstralPet", "Sem internet");
+                shown_while_idle_ = false;
+            }
+            return;
+        }
+        offline_since_us_ = 0;
+        if (offline_) {
+            offline_ = false;
+            shown_while_idle_ = false;
+            React("happy", "Oba, a internet voltou!", 3);
+        }
+        // Hotspot do iPhone sempre dá IP 172.20.10.x
+        bool hotspot = wifi.GetIpAddress().rfind("172.20.10.", 0) == 0;
+        if (hotspot != on_hotspot_) {
+            on_hotspot_ = hotspot;
+            RefreshDescription();
+            if (hotspot && state == kDeviceStateIdle) {
+                ESP_LOGI("AstralPet", "Passeando (hotspot do celular)");
+                React("cool", "Oba, passeando!", 4);
+                AttentionSound();
+            }
+        }
+    }
+
+    // ---------- Pomodoro ----------
+    void CheckPomodoro(int64_t now_us) {
+        if (pomo_phase_ == 0 || now_us < pomo_end_us_) {
+            return;
+        }
+        if (pomo_phase_ == 1) {  // acabou o foco: comemora e começa a pausa
+            pomo_cycles_++;
+            bool long_break = pomo_cycles_ % 4 == 0;
+            pomo_phase_ = 2;
+            pomo_end_us_ = now_us + (long_break ? 15 : pomo_break_min_) * 60 * 1000000LL;
+            mood_ = Clamp(mood_ + 3);
+            ESP_LOGI("AstralPet", "Pomodoro: pausa (%d ciclos)", pomo_cycles_);
+            React("laughing", long_break ? "Pausa longa! Você mandou bem!" : "Pausa! Bom trabalho!", 6);
+            AstralMusic::BootJingle();  // musiquinha de comemoração
+        } else {  // acabou a pausa: chama de volta para o foco
+            pomo_phase_ = 1;
+            pomo_end_us_ = now_us + pomo_focus_min_ * 60 * 1000000LL;
+            ESP_LOGI("AstralPet", "Pomodoro: foco de novo");
+            React("happy", "Bora voltar? Foco!", 5);
+            AttentionSound();
+        }
+        shown_while_idle_ = false;
+        balloon_text_.clear();  // força atualizar o tempo no balão
+        RefreshDescription();
+    }
+
+    std::string Pomodoro(const std::string& action, int focus_min, int break_min) {
+        if (action == "parar") {
+            if (pomo_phase_ == 0) {
+                return "{\"ok\":true,\"info\":\"nao havia pomodoro\"}";
+            }
+            int cycles = pomo_cycles_;
+            pomo_phase_ = 0;
+            UpdateBalloon(false);
+            shown_while_idle_ = false;
+            RefreshDescription();
+            return "{\"ok\":true,\"ciclos_completos\":" + std::to_string(cycles) + "}";
+        }
+        if (action == "status") {
+            if (pomo_phase_ == 0) {
+                return "{\"ativo\":false}";
+            }
+            int left = static_cast<int>((pomo_end_us_ - esp_timer_get_time()) / 60000000LL) + 1;
+            return std::string("{\"ativo\":true,\"fase\":\"") + (pomo_phase_ == 1 ? "foco" : "pausa") +
+                   "\",\"minutos_restantes\":" + std::to_string(left) + ",\"ciclos\":" +
+                   std::to_string(pomo_cycles_) + "}";
+        }
+        pomo_focus_min_ = std::clamp(focus_min, 1, 120);
+        pomo_break_min_ = std::clamp(break_min, 1, 60);
+        pomo_phase_ = 1;
+        pomo_cycles_ = 0;
+        pomo_end_us_ = esp_timer_get_time() + pomo_focus_min_ * 60 * 1000000LL;
+        ESP_LOGI("AstralPet", "Pomodoro: %d min foco / %d min pausa", pomo_focus_min_, pomo_break_min_);
+        balloon_text_.clear();
+        shown_while_idle_ = false;
+        close_after_reply_ = true;  // fecha a conversa para ele ficar concentrado na tela
+        close_saw_reply_ = false;
+        close_after_us_ = esp_timer_get_time();
+        RefreshDescription();
+        return "{\"ok\":true,\"foco_min\":" + std::to_string(pomo_focus_min_) + ",\"pausa_min\":" +
+               std::to_string(pomo_break_min_) + "}";
+    }
+
     // Alguém interagiu (conversa, carinho, jogo, música). Se ele estava com saudade, comemora a volta.
     // Devolve true se fez a festa de boas-vindas (aí quem chamou não precisa reagir de novo).
     bool NoteInteraction(bool can_celebrate) {
@@ -330,6 +501,9 @@ private:
     }
 
     void CheckLonely(int64_t now_us) {
+        if (pomo_phase_ != 0) {
+            last_interaction_us_ = now_us;  // no pomodoro o dono está do lado
+        }
         if (lonely_ || sleeping_ || fainted_ || IsNight() || last_interaction_us_ == 0) {
             if (last_interaction_us_ == 0) {
                 last_interaction_us_ = now_us;
@@ -359,7 +533,8 @@ private:
         if (done_day == tm_now.tm_yday) {
             return;
         }
-        if (state != kDeviceStateIdle || paused_.load() || sleeping_ || fainted_ || mood_ < kRed) {
+        if (state != kDeviceStateIdle || paused_.load() || sleeping_ || fainted_ || mood_ < kRed ||
+            pomo_phase_ == 1) {
             return;  // tenta de novo no próximo minuto (até o fim da hora)
         }
         done_day = tm_now.tm_yday;
@@ -455,6 +630,20 @@ private:
     int64_t last_interaction_us_ = 0;
     int64_t welcomed_back_us_ = -60 * 60 * 1000000LL;
     bool boot_jingle_done_ = false;
+    int64_t next_idle_anim_us_ = 0;     // próxima animação de espera
+    int64_t mash_start_us_ = 0;         // botão sem parar
+    int mash_count_ = 0;
+    int64_t last_dizzy_us_ = -60 * 1000000LL;
+    int64_t cuddle_window_us_ = 0;      // carinho demais
+    int cuddle_count_ = 0;
+    bool offline_ = false;              // sem Wi-Fi
+    int64_t offline_since_us_ = 0;
+    bool on_hotspot_ = false;           // no 5G do celular (passeando)
+    int pomo_phase_ = 0;                // 0 nada, 1 foco, 2 pausa
+    int64_t pomo_end_us_ = 0;
+    int pomo_focus_min_ = 25;
+    int pomo_break_min_ = 5;
+    int pomo_cycles_ = 0;
     std::string test_face_;          // modo teste: rosto forçado
     int64_t test_face_until_us_ = 0;
     std::string pending_test_;       // modo teste: reação que roda quando a conversa fechar
@@ -635,6 +824,9 @@ private:
                 app.ToggleChatState();
             }
         }
+        CheckNetwork(state, now_us);
+        CheckPomodoro(now_us);
+        MaybeIdleAnimation(state, now_us);
         if (!boot_jingle_done_ && state == kDeviceStateIdle) {
             boot_jingle_done_ = true;
             AstralMusic::BootJingle();  // "tô pronto!"
@@ -760,8 +952,15 @@ private:
                          static_cast<int>(energy_), kReviveEnergy);
                 text = buf;
             }
+        } else if (visible && offline_) {
+            text = "Cadê a internet? Não consigo me conectar...";
         } else if (visible && mood_ < kRed) {
             text = "Tô bolado! Hmpf.\nSegura o botão pra fazer as pazes";
+        } else if (visible && pomo_phase_ != 0) {
+            int left = static_cast<int>((pomo_end_us_ - esp_timer_get_time()) / 60000000LL) + 1;
+            char buf[64];
+            snprintf(buf, sizeof(buf), pomo_phase_ == 1 ? "Foco! Faltam %d min" : "Pausa: %d min", std::max(left, 1));
+            text = buf;
         }
         if (text == balloon_text_ || panel_display_ == nullptr) {
             return;
@@ -773,6 +972,9 @@ private:
     std::string NeedEmotion() const {
         if (esp_timer_get_time() < test_face_until_us_) return test_face_;  // modo teste: rosto forçado
         if (fainted_) return "fainted";                       // desmaiado: olhos X X
+        if (offline_) return "confused";                      // sem internet
+        if (pomo_phase_ == 1) return "focus";                 // pomodoro: concentrado
+        if (pomo_phase_ == 2) return "relaxed";               // pomodoro: pausa
         if (esp_timer_get_time() < nausea_until_us_) return "nauseous";  // comeu demais
         if (sleeping_) return "sleepy";
         if (health_ < kRed) return "sick";                    // doentinho: febre e termômetro
@@ -808,7 +1010,7 @@ private:
     }
 
     void Nag(DeviceState state, int64_t now_us) {
-        if (state != kDeviceStateIdle || sleeping_ || fainted_) return;
+        if (state != kDeviceStateIdle || sleeping_ || fainted_ || pomo_phase_ != 0) return;
         if (last_nag_us_ != 0 && now_us - last_nag_us_ < kNagSeconds * 1000000LL) return;
         const char* message = nullptr;
         if (health_ < kRed) message = "Tô doentinho...";
@@ -972,6 +1174,8 @@ private:
             else if (IsNight()) how += " Ja e tarde (22h-6h) e voce esta com sono: boceje e fale baixinho.";
             if (health_ < kRed) how += " Voce esta doentinho e fraco.";
             if (lonely_) how += " Voce esta com saudade do dono (ficou horas sozinho).";
+            if (on_hotspot_) how += " Voce esta passeando (usando a internet do celular do dono).";
+            if (pomo_phase_ == 1) how += " O dono esta num POMODORO focado: fale pouco e incentive.";
             if (esp_timer_get_time() - welcomed_back_us_ < 10 * 60 * 1000000LL)
                 how += " O dono acabou de voltar depois de horas longe: diga que sentiu saudade.";
             if (weather_ == kWeatherRain) how += " Esta chovendo la fora.";
@@ -1063,12 +1267,26 @@ private:
                         return std::string("{\"ok\":true}");
                     });
 
+        mcp.AddTool("self.pet.pomodoro",
+                    "Pomodoro (tecnica de foco): acao='iniciar' (com 'foco' e 'pausa' em minutos; padrao 25 e 5), "
+                    "'parar' ou 'status'. Use quando o dono quiser estudar/trabalhar focado, pedir um pomodoro, "
+                    "ou perguntar quanto falta. Voce fica concentrado na tela, comemora cada pausa e chama o dono "
+                    "de volta. A cada 4 focos a pausa e de 15 min. Responda com uma frase curta.",
+                    PropertyList({Property("acao", kPropertyTypeString),
+                                  Property("foco", kPropertyTypeInteger, 25, 1, 120),
+                                  Property("pausa", kPropertyTypeInteger, 5, 1, 60)}),
+                    [this](const PropertyList& p) -> ReturnValue {
+                        return Pomodoro(p["acao"].value<std::string>(), p["foco"].value<int>(),
+                                        p["pausa"].value<int>());
+                    });
+
         // Modo de teste do dono: põe o bichinho num estado na hora (para ver rostos e reações).
         mcp.AddTool("self.pet.test",
                     "MODO TESTE do dono. Use SOMENTE quando o dono disser 'modo teste' seguido do estado. "
                     "estado (uma palavra, sem acento): 'desmaiar', 'faminto', 'cheio', 'cansado', 'bolado', "
                     "'doente', 'enjoado', 'saudade', 'volta', 'susto', 'musica', 'chuva', 'frio', 'sol', "
-                    "'semclima', 'almoco', 'jantar', 'danca', 'normal'. Depois responda so 'Modo teste: <estado>.'",
+                    "'semclima', 'almoco', 'jantar', 'danca', 'bocejo', 'olhar', 'assobio', 'tonto', 'semnet', "
+                    "'passeio', 'normal'. Depois responda so 'Modo teste: <estado>.'",
                     PropertyList({Property("estado", kPropertyTypeString)}),
                     [this](const PropertyList& p) -> ReturnValue { return SetTestState(p["estado"].value<std::string>()); });
     }
@@ -1095,6 +1313,20 @@ private:
             dance_until_us_ = esp_timer_get_time() + 15 * 1000000LL;
             Board::GetInstance().GetDisplay()->ShowNotification("Que som!", 3000);
             shown_while_idle_ = false;
+        } else if (test == "bocejo") {
+            ReactQuiet("yawn", 4);
+        } else if (test == "olhar") {
+            ReactQuiet("looking", 4);
+        } else if (test == "assobio") {
+            ReactQuiet("whistle", 4);
+        } else if (test == "tonto") {
+            React("dizzy", "Para, para... tô tonto!", 6);
+        } else if (test == "semnet") {
+            ForceTestFace("confused");
+            Board::GetInstance().GetDisplay()->ShowNotification("Cadê a internet?", 5000);
+        } else if (test == "passeio") {
+            React("cool", "Oba, passeando!", 4);
+            AttentionSound();
         } else if (test == "danca") {
             StartDance();
         } else if (test == "almoco" || test == "jantar") {
@@ -1153,7 +1385,8 @@ private:
         } else if (state == "semclima") {
             weather_ = kWeatherNone;
         } else if (state == "volta" || state == "susto" || state == "musica" || state == "almoco" ||
-                   state == "jantar" || state == "danca") {
+                   state == "jantar" || state == "danca" || state == "bocejo" || state == "olhar" ||
+                   state == "assobio" || state == "tonto" || state == "semnet" || state == "passeio") {
             pending_test_ = state;  // acontece quando a conversa fechar
         } else {
             return "{\"ok\":false,\"erro\":\"estado desconhecido\"}";

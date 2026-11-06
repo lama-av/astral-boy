@@ -3,6 +3,7 @@
 
 #include "application.h"
 #include "astral_display.h"
+#include "astral_music.h"
 #include "astral_pet.h"
 #include "astral_radio.h"
 #include "audio_codec.h"
@@ -159,7 +160,7 @@ private:
             float env = std::min({1.0f, i / static_cast<float>(fade), (count - i) / static_cast<float>(fade)});
             pcm[i] = static_cast<int16_t>(std::sin(2.0f * static_cast<float>(M_PI) * hz * i / rate) * volume * env);
         }
-        Application::GetInstance().GetAudioService().PushPcmToPlaybackQueue(std::move(pcm), 100);
+        AstralMusic::Play(std::move(pcm));  // mistura na música de fundo, se tocando
     }
 
     // "Bzzzz": buzina de erro (onda quadrada grave, áspera, com tremidinha).
@@ -177,7 +178,7 @@ private:
             float env = std::min({1.0f, i / static_cast<float>(fade), (count - i) / static_cast<float>(fade)});
             pcm[i] = static_cast<int16_t>(sq * 4200.0f * env);
         }
-        Application::GetInstance().GetAudioService().PushPcmToPlaybackQueue(std::move(pcm), 100);
+        AstralMusic::Play(std::move(pcm));  // mistura na música de fundo, se tocando
     }
 
     // Mordeu o ar: estalo dos dentes ("nhac") + "bonk" grave descendo.
@@ -199,7 +200,7 @@ private:
             float env = std::min(1.0f, i / (rate * 0.004f)) * (1.0f - k);
             pcm.push_back(static_cast<int16_t>((std::sin(phase) + 0.35f * std::sin(2 * phase)) * 6500.0f * env));
         }
-        Application::GetInstance().GetAudioService().PushPcmToPlaybackQueue(std::move(pcm), 100);
+        AstralMusic::Play(std::move(pcm));  // mistura na música de fundo, se tocando
     }
 
     // A maçã passou: apito caindo ("fiuuuu") e um "tum" abafado no chão.
@@ -226,7 +227,7 @@ private:
             float env = std::exp(-7.0f * k);
             pcm.push_back(static_cast<int16_t>((std::sin(phase) * 7000.0f + prev * 14000.0f) * env));
         }
-        Application::GetInstance().GetAudioService().PushPcmToPlaybackQueue(std::move(pcm), 100);
+        AstralMusic::Play(std::move(pcm));  // mistura na música de fundo, se tocando
     }
 
     // "Crunch": duas mordidas de ruído com caída rápida (som de maçã crocante).
@@ -244,7 +245,7 @@ private:
             }
             pcm.insert(pcm.end(), rate * 45 / 1000, 0);
         }
-        Application::GetInstance().GetAudioService().PushPcmToPlaybackQueue(std::move(pcm), 100);
+        AstralMusic::Play(std::move(pcm));  // mistura na música de fundo, se tocando
     }
 
     // "Plim": sininho (nota + harmônico) que vai sumindo.
@@ -259,7 +260,7 @@ private:
                       0.2f * std::sin(2 * static_cast<float>(M_PI) * hz * 5.4f * t);
             pcm[i] = static_cast<int16_t>(v * 4200.0f * env);
         }
-        Application::GetInstance().GetAudioService().PushPcmToPlaybackQueue(std::move(pcm), 100);
+        AstralMusic::Play(std::move(pcm));  // mistura na música de fundo, se tocando
     }
 
     // ---------- tela (por cima do rosto animado) ----------
@@ -473,6 +474,7 @@ private:
         // Velocidade em px por SEGUNDO (movimento pelo tempo real, não por quadro: a tela da
         // protoboard redesenha devagar e cada quadro leva bem mais que kFrameMs).
         float speed = 180.0f;
+        AstralMusic::StartBgm();  // a música da dança, de fundo
         playing_ = true;
         while (lives > 0 && StillIdle()) {
             float x = 20.0f + static_cast<float>(esp_random() % (LV_HOR_RES - 40 - kAppleSize));
@@ -539,6 +541,7 @@ private:
             Wait(300);  // a troca de rosto leva um instante: a próxima maçã só cai com a boca aberta
         }
         playing_ = false;
+        AstralMusic::StopBgm();
 
         bool new_record = score > best_;
         if (new_record) {
@@ -589,6 +592,7 @@ private:
         int show_ms = 1500;  // quanto tempo os objetos ficam na tela (diminui)
         int gap_ms = 700;    // pausa entre rodadas (diminui)
         int round = 0;
+        AstralMusic::StartBgm();
         playing_ = true;
         // Sem limite: vai até acabarem as vidas. Cada estrela pega acelera o jogo.
         while (lives > 0 && StillIdle()) {
@@ -659,6 +663,7 @@ private:
             }
         }
         playing_ = false;
+        AstralMusic::StopBgm();
         bool new_record = counted > best_stars_;
         if (new_record) {
             best_stars_ = counted;
