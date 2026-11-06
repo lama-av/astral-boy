@@ -311,6 +311,9 @@ void AudioService::AudioInputTask() {
             int samples = 160;  // 10ms
             std::vector<int16_t> data;
             if (ReadAudioData(data, 16000, samples)) {
+                if (mic_listener_ready_.load()) {
+                    mic_listener_(data);  // Astral Boy: ouvidos (susto, música)
+                }
                 audio_engine_->Feed(std::move(data));
                 continue;
             }

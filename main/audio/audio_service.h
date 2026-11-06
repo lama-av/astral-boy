@@ -2,6 +2,7 @@
 #define AUDIO_SERVICE_H
 
 #include <atomic>
+#include <functional>
 #include <chrono>
 #include <condition_variable>
 #include <memory>
@@ -147,6 +148,12 @@ public:
     void PlaySound(const std::string_view& sound);
     // Astral Boy: PCM mono já na taxa de saída do codec (ex.: rádio). Espera vaga na fila.
     bool PushPcmToPlaybackQueue(std::vector<int16_t>&& pcm, int timeout_ms);
+    // Astral Boy: recebe cada pedacinho de 10 ms do microfone (16 kHz) enquanto ele escuta em repouso
+    // (palavra de ativação). Roda na tarefa de áudio: tem que ser rápido. Definir uma vez só, no início.
+    void SetMicListener(std::function<void(const std::vector<int16_t>&)> fn) {
+        mic_listener_ = std::move(fn);
+        mic_listener_ready_ = true;
+    }
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
     void ResetDecoder();
     void SetModelsList(srmodel_list_t* models_list);
@@ -154,6 +161,8 @@ public:
 private:
     AudioCodec* codec_ = nullptr;
     AudioServiceCallbacks callbacks_;
+    std::function<void(const std::vector<int16_t>&)> mic_listener_;
+    std::atomic<bool> mic_listener_ready_{false};
     std::unique_ptr<AudioEngine> audio_engine_;
     std::unique_ptr<AudioDebugger> audio_debugger_;
     void* opus_encoder_ = nullptr;

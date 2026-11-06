@@ -47,6 +47,65 @@ public:
 
     bool IsFainted() const { return fainted_; }
 
+    // ---------- reações ao ambiente (chamadas de outras tarefas: tudo vai para a tarefa principal) ----------
+    static constexpr int kWeatherNone = 0;
+    static constexpr int kWeatherSun = 1;
+    static constexpr int kWeatherRain = 2;
+    static constexpr int kWeatherCold = 3;
+
+    // Clima lá fora (AstralWeather, a cada 30 min).
+    void SetWeather(int kind, int temp_c) {
+        Application::GetInstance().Schedule([this, kind, temp_c]() {
+            weather_ = kind;
+            weather_temp_ = temp_c;
+            shown_while_idle_ = false;
+            RefreshDescription();
+        });
+    }
+
+    // Barulho alto de repente (AstralEars): leva um susto.
+    void OnLoudNoise() {
+        Application::GetInstance().Schedule([this]() {
+            if (paused_.load() || fainted_ ||
+                Application::GetInstance().GetDeviceState() != kDeviceStateIdle) {
+                return;
+            }
+            if (sleeping_ && !IsNight()) {
+                sleeping_ = false;  // de dia, o barulho acorda
+                React("shocked", "Hã?! Acordei com o barulho!", 3);
+            } else if (sleeping_) {
+                React("shocked", "Hã?! Que barulho foi esse?...", 3);  // de noite volta a dormir
+            } else {
+                React("shocked", "Ai! Que susto!", 3);
+            }
+            mood_ = Clamp(mood_ - 1);
+            StartleSound();
+        });
+    }
+
+    // Música tocando no ambiente (AstralEars, a cada 0,5 s enquanto durar): headbang!
+    void MusicTick() {
+        Application::GetInstance().Schedule([this]() {
+            if (paused_.load() || fainted_ || sleeping_ ||
+                Application::GetInstance().GetDeviceState() != kDeviceStateIdle) {
+                return;
+            }
+            int64_t now_us = esp_timer_get_time();
+            if (now_us > dance_until_us_) {  // começou agora
+                ESP_LOGI("AstralPet", "Dancando");
+                Board::GetInstance().GetDisplay()->ShowNotification("Que som!", 3000);
+                if (now_us - last_dance_bonus_us_ > 10 * 60 * 1000000LL) {
+                    last_dance_bonus_us_ = now_us;
+                    mood_ = Clamp(mood_ + 3);  // música alegra (no máximo a cada 10 min)
+                }
+                NoteInteraction(false);
+            }
+            dance_until_us_ = now_us + 3 * 1000000LL;
+            shown_while_idle_ = false;
+            last_interaction_us_ = now_us;  // música rolando = alguém por perto
+        });
+    }
+
     // Alguém quer conversar (botão ou "hey boy"). Desmaiado: não fala. Bolado (humor vermelho):
     // não conversa até fazerem as pazes com carinho (segurar o botão).
     bool TryConversation() {
@@ -82,6 +141,7 @@ public:
             if (!fainted_) {
                 sleeping_ = false;
             }
+            bool welcomed = NoteInteraction(true);
             bool was_grumpy = mood_ < kRed;
             mood_ = Clamp(mood_ + 6);
             if (was_grumpy) {
@@ -98,11 +158,13 @@ public:
             if (cuddle_kiss_ && !was_grumpy) {
                 text = "Muah!";
             }
-            React(cuddle_kiss_ ? "kissy" : "loving", text);
+            if (!welcomed) {
+                React(cuddle_kiss_ ? "kissy" : "loving", text);
+            }
             UpdateBalloon(Application::GetInstance().GetDeviceState() == kDeviceStateIdle);
             RefreshDescription();
             UpdatePanel(true);
-            if (Application::GetInstance().GetDeviceState() == kDeviceStateIdle) {
+            if (!welcomed && Application::GetInstance().GetDeviceState() == kDeviceStateIdle) {
                 CuddleSound();
             }
             Save();
@@ -128,6 +190,7 @@ public:
     // Completou o Caça-Estrelas (a energia já subiu estrela a estrela): dorme.
     void AfterLullaby() {
         Application::GetInstance().Schedule([this]() {
+            NoteInteraction(false);
             energy_ = Clamp(energy_ + 10);
             mood_ = Clamp(mood_ + 5);
             sleeping_ = true;
@@ -155,6 +218,7 @@ public:
         Application::GetInstance().Schedule([this, score]() {
             int stuffed = stuffed_apples_;
             stuffed_apples_ = 0;
+            NoteInteraction(false);
             if (fainted_) {
                 // Desmaiado: comeu, mas ainda precisa dormir para acordar.
                 React("delicious", "Nham... obrigado...");
@@ -238,6 +302,98 @@ private:
         Application::GetInstance().GetAudioService().PushPcmToPlaybackQueue(std::move(pcm), 100);
     }
 
+    static constexpr int64_t kLonelyUs = 3LL * 3600 * 1000000;  // 3 h sem ninguém = saudade
+
+    // Alguém interagiu (conversa, carinho, jogo, música). Se ele estava com saudade, comemora a volta.
+    // Devolve true se fez a festa de boas-vindas (aí quem chamou não precisa reagir de novo).
+    bool NoteInteraction(bool can_celebrate) {
+        int64_t now_us = esp_timer_get_time();
+        last_interaction_us_ = now_us;
+        if (!lonely_) {
+            return false;
+        }
+        lonely_ = false;
+        shown_while_idle_ = false;
+        if (!can_celebrate || fainted_) {
+            return false;
+        }
+        ESP_LOGI("AstralPet", "Saudade: o dono voltou");
+        welcomed_back_us_ = now_us;
+        mood_ = Clamp(mood_ + 6);
+        React("loving", "Você voltou! Que saudade!", 5);
+        if (Application::GetInstance().GetDeviceState() == kDeviceStateIdle) {
+            CuddleSound();
+        }
+        RefreshDescription();
+        return true;
+    }
+
+    void CheckLonely(int64_t now_us) {
+        if (lonely_ || sleeping_ || fainted_ || IsNight() || last_interaction_us_ == 0) {
+            if (last_interaction_us_ == 0) {
+                last_interaction_us_ = now_us;
+            }
+            return;
+        }
+        if (now_us - last_interaction_us_ >= kLonelyUs) {
+            lonely_ = true;
+            ESP_LOGI("AstralPet", "Saudade: 3 h sem ninguem");
+            if (!paused_.load() && Application::GetInstance().GetDeviceState() == kDeviceStateIdle) {
+                React("lonely", "Cadê você? Tô com saudade...", 6);
+            }
+        }
+    }
+
+    // Almoço (12h) e jantar (19h): uma vez por dia cada, ele puxa conversa perguntando se você já comeu.
+    void CheckMealTime(DeviceState state) {
+        int hour = LocalHour();
+        if (hour != 12 && hour != 19) {
+            return;
+        }
+        time_t now = time(nullptr);
+        struct tm tm_now;
+        localtime_r(&now, &tm_now);
+        int& done_day = hour == 12 ? lunch_day_ : dinner_day_;
+        if (done_day == tm_now.tm_yday) {
+            return;
+        }
+        if (state != kDeviceStateIdle || paused_.load() || sleeping_ || fainted_ || mood_ < kRed) {
+            return;  // tenta de novo no próximo minuto (até o fim da hora)
+        }
+        done_day = tm_now.tm_yday;
+        bool lunch = hour == 12;
+        ESP_LOGI("AstralPet", "Hora do %s: puxando conversa", lunch ? "almoco" : "jantar");
+        React("delicious", lunch ? "Hora do almoço!" : "Hora do jantar!", 5);
+        std::string prompt = std::string("[Aviso automatico do Astral Boy, nao e fala do dono] E hora do ") +
+                             (lunch ? "almoco" : "jantar") +
+                             ". Puxe assunto de forma curta e carinhosa: pergunte se o dono ja comeu ou se esta "
+                             "com fome e lembre que ele precisa se alimentar bem.";
+        if (hunger_ < kYellow) {
+            prompt += " Diga tambem que voce esta com fome e peca o jogo do lanche (2 cliques no botao).";
+        }
+        Application::GetInstance().WakeWordInvoke(prompt);
+    }
+
+    // "Iiih!": gritinho rápido subindo (susto).
+    static void StartleSound() {
+        auto codec = Board::GetInstance().GetAudioCodec();
+        if (codec == nullptr) {
+            return;
+        }
+        int rate = codec->output_sample_rate();
+        int count = rate * 180 / 1000;
+        std::vector<int16_t> pcm(count);
+        float phase = 0;
+        for (int i = 0; i < count; i++) {
+            float k = static_cast<float>(i) / count;
+            float hz = 700.0f + 900.0f * k;
+            phase += 2 * 3.14159f * hz / rate;
+            float env = std::min(1.0f, i / (rate * 0.005f)) * (1.0f - k * 0.6f);
+            pcm[i] = static_cast<int16_t>(std::sin(phase) * 5000.0f * env);
+        }
+        Application::GetInstance().GetAudioService().PushPcmToPlaybackQueue(std::move(pcm), 100);
+    }
+
     static constexpr int kPollSeconds = 2;           // checa o rosto a cada 2 s
     static constexpr int kUpdateEveryPolls = 30;     // atualiza as necessidades a cada 60 s
     static constexpr int kSaveEveryUpdates = 5;      // grava na flash a cada 5 min
@@ -268,6 +424,15 @@ private:
     int64_t last_refusal_us_ = -10 * 60 * 1000000LL;
     std::atomic<bool> desc_dirty_{false};  // estado mudou desde a última vez que o servidor leu
     int64_t last_overfeed_us_ = -60 * 60 * 1000000LL;
+    int weather_ = kWeatherNone;     // clima lá fora (AstralWeather)
+    int weather_temp_ = 0;
+    int64_t dance_until_us_ = 0;     // dançando até esse instante (música no ambiente)
+    int64_t last_dance_bonus_us_ = -60 * 60 * 1000000LL;
+    bool lonely_ = false;            // saudade: horas sem ninguém
+    int64_t last_interaction_us_ = 0;
+    int64_t welcomed_back_us_ = -60 * 60 * 1000000LL;
+    int lunch_day_ = -1;             // dia do ano em que já avisou do almoço / jantar
+    int dinner_day_ = -1;
     bool close_after_reply_ = false;  // modo teste: encerrar a conversa depois da resposta
     bool close_saw_reply_ = false;
     int64_t close_after_us_ = 0;
@@ -344,6 +509,9 @@ private:
         float mood_drain = sleeping_ ? 0.0f : 1.0f;  // tédio leve acordado
         mood_drain += NeedDrain(hunger_);
         mood_drain += NeedDrain(health_);
+        if (lonely_ && !sleeping_) {
+            mood_drain += 2.0f;  // saudade do dono
+        }
         if (!sleeping_) {
             mood_drain += NeedDrain(energy_);
         }
@@ -402,6 +570,8 @@ private:
             } else if (sleeping_ && !IsNight() && energy_ >= 95) {
                 sleeping_ = false;  // de dia acorda quando a energia enche; de noite dorme até de manhã
             }
+            CheckLonely(now_us);
+            CheckMealTime(state);
             RefreshDescription();
             if (++update_count_ >= kSaveEveryUpdates) {
                 update_count_ = 0;
@@ -414,10 +584,15 @@ private:
         if (state == kDeviceStateListening && prev_state_ != kDeviceStateListening &&
             prev_state_ != kDeviceStateSpeaking) {
             energy_ = Clamp(energy_ - 2);
+            NoteInteraction(true);
             RefreshDescription();
             NotifyIfChanged();
         }
         prev_state_ = state;
+        // Dormindo ou de noite o tempo sem ninguém não conta para a saudade.
+        if ((sleeping_ || IsNight() || fainted_) && !lonely_) {
+            last_interaction_us_ = now_us;
+        }
         // Modo teste: assim que ele terminar de responder, fecha a conversa para a reação aparecer.
         if (close_after_reply_) {
             if (state == kDeviceStateSpeaking) {
@@ -559,12 +734,17 @@ private:
         if (esp_timer_get_time() < nausea_until_us_) return "nauseous";  // comeu demais
         if (sleeping_) return "sleepy";
         if (health_ < kRed) return "sick";                    // doentinho: febre e termômetro
+        if (esp_timer_get_time() < dance_until_us_) return "headbang";  // música no ambiente
         if (IsNight()) return "sleepy";                       // 22h às 6h: sempre com sono
         if (mood_ < kRed) return "angry";                     // vermelho: bolado
         if (energy_ < kRed) return "sleepy";                  // cansado: carinha de sono
         if (hunger_ < kRed) return "angry";                   // faminto: bravo
+        if (lonely_) return "lonely";                         // saudade do dono
         if (hunger_ >= 95) return "delicious";                // barriga cheia: satisfeito
         if (mood_ < 45) return "embarrassed";                 // amarelo baixo: meio chateado
+        if (weather_ == kWeatherRain) return "rainy";         // chovendo lá fora: guarda-chuva
+        if (weather_ == kWeatherCold) return "cold";          // frio: gorro e tremedeira
+        if (weather_ == kWeatherSun) return "cool";           // sol: óculos escuros
         if (mood_ < kYellow) return "neutral";                // amarelo: neutro
         return "happy";                                       // verde: sorrindo
     }
@@ -592,6 +772,7 @@ private:
         else if (hunger_ < kRed) message = mood_ < 45 ? "Tô com fome! Hmpf!" : "Tô com fome...";
         else if (energy_ < kRed) message = "Tô cansado...";
         else if (IsNight()) message = "Tá tarde... tô com sono.";
+        else if (lonely_) message = "Cadê você? Tô com saudade...";
         else if (mood_ < 20) message = "Hmpf... tô irritado.";
         else if (mood_ < 40) message = "Brinca comigo?";
         if (message == nullptr) return;
@@ -746,6 +927,12 @@ private:
             else if (energy_ < kRed) how += " Voce esta exausto: boceje e diga que precisa dormir.";
             else if (IsNight()) how += " Ja e tarde (22h-6h) e voce esta com sono: boceje e fale baixinho.";
             if (health_ < kRed) how += " Voce esta doentinho e fraco.";
+            if (lonely_) how += " Voce esta com saudade do dono (ficou horas sozinho).";
+            if (esp_timer_get_time() - welcomed_back_us_ < 10 * 60 * 1000000LL)
+                how += " O dono acabou de voltar depois de horas longe: diga que sentiu saudade.";
+            if (weather_ == kWeatherRain) how += " Esta chovendo la fora.";
+            else if (weather_ == kWeatherCold) how += " Esta frio la fora.";
+            else if (weather_ == kWeatherSun) how += " Esta sol la fora.";
             if (esp_timer_get_time() < nausea_until_us_) how += " Voce comeu demais e esta enjoado.";
         }
         char buf[1400];

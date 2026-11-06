@@ -8,6 +8,8 @@
 #include "astral_clock.h"
 #include "astral_web.h"
 #include "astral_game.h"
+#include "astral_ears.h"
+#include "astral_weather.h"
 #include "system_reset.h"
 #include "application.h"
 #include "button.h"
@@ -212,6 +214,8 @@ public:
         alarms_ = new AstralAlarms(radio, static_cast<AstralLcdDisplay*>(display_));
         new AstralWeb();
         game_ = new AstralGame(static_cast<AstralLcdDisplay*>(display_), pet_, radio);
+        new AstralEars(pet_);      // susto com barulho e headbang com música
+        new AstralWeather(pet_);   // clima de verdade muda o rosto
         if (DISPLAY_BACKLIGHT_PIN != GPIO_NUM_NC) {
             GetBacklight()->RestoreBrightness();
         }
