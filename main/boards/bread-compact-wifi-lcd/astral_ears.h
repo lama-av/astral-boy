@@ -49,6 +49,7 @@ private:
     int music_misses_ = 0;
     bool music_ = false;
     int64_t last_startle_us_ = 0;
+    int64_t last_music_us_ = -60 * 1000000LL;
 
     void OnFrame(const std::vector<int16_t>& pcm) {
         if (pcm.empty()) {
@@ -88,7 +89,8 @@ private:
 
         int64_t now_us = esp_timer_get_time();
         if (frames_ > kWindow && quiet_speaker && rms > kStartleMin && rms > floor_ * kStartleRatio &&
-            recent < floor_ * 3.0f && !music_ && now_us - last_startle_us_ > 20 * 1000000LL) {
+            recent < floor_ * 3.0f && !music_ && loud_log_ < 0.5f &&
+            now_us - last_music_us_ > 20 * 1000000LL && now_us - last_startle_us_ > 20 * 1000000LL) {
             last_startle_us_ = now_us;
             ESP_LOGI(TAG, "Susto! volume %d (fundo %d)", static_cast<int>(rms), static_cast<int>(floor_));
             pet_->OnLoudNoise();
@@ -140,7 +142,9 @@ private:
         beat_log_ = beat;
         loud_log_ = loud_frac;
 
-        bool looks_like_music = loud_frac >= kMusicLoudFrac && beat >= kMusicBeat;
+        // Para COMEÇAR precisa de som contínuo + batida; para CONTINUAR basta o som seguir contínuo
+        // (a força da batida oscila muito de um trecho da música para outro).
+        bool looks_like_music = music_ ? loud_frac >= 0.55f : (loud_frac >= kMusicLoudFrac && beat >= kMusicBeat);
         if (looks_like_music) {
             music_misses_ = 0;
             if (++music_hits_ >= 2 && !music_) {  // 1 s seguido parecendo música
@@ -149,8 +153,9 @@ private:
             }
         } else {
             music_hits_ = 0;
-            if (music_ && ++music_misses_ >= 4) {  // 2 s sem música
+            if (music_ && ++music_misses_ >= 6) {  // 3 s sem música
                 music_ = false;
+                last_music_us_ = esp_timer_get_time();
                 ESP_LOGI(TAG, "Musica parou");
             }
         }
