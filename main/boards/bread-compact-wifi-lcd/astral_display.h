@@ -3,7 +3,9 @@
 
 #include "display/lcd_display.h"
 
+#include <cstring>
 #include <initializer_list>
+#include <utility>
 #include <string>
 #include <atomic>
 
@@ -136,6 +138,30 @@ public:
         ApplyAstralStyle();
     }
 
+    // Telas do sistema (ligando, configurando Wi-Fi, ativando, erro) usam ícones genéricos: troca pelos
+    // rostos do Astral Boy. Se o rosto ainda não carregou (bem no começo do boot), usa o ícone mesmo.
+    bool SetEmotion(const char* emotion) override {
+        static const std::pair<const char*, const char*> kSystemFaces[] = {
+            {"gear", "thinking"},          // configurando Wi-Fi
+            {"link", "winking"},           // ativação no xiaozhi.me
+            {"cloud_download", "thinking"},
+            {"cloud_off", "confused"},
+            {"cancel", "sad"},
+            {"warning", "shocked"},
+            {"wifi", "thinking"},
+            {"wifi_off", "confused"},
+            {"microchip_ai", "neutral"},
+        };
+        if (emotion != nullptr) {
+            for (const auto& [icon, face] : kSystemFaces) {
+                if (strcmp(emotion, icon) == 0 && SpiLcdDisplay::SetEmotion(face)) {
+                    return true;
+                }
+            }
+        }
+        return SpiLcdDisplay::SetEmotion(emotion);
+    }
+
     // O servidor manda "% self.ferramenta..." quando a IA usa uma ferramenta: não mostrar na legenda.
     void SetChatMessage(const char* role, const char* content) override {
         if (content != nullptr && content[0] == '%') {
@@ -208,6 +234,14 @@ private:
         const lv_color_t ink = lv_color_hex(0x1A1824);
 
         lv_obj_set_style_bg_opa(top_bar_, LV_OPA_TRANSP, 0);
+        // Fundo sempre branco (a pele do personagem), mesmo se o tema salvo for o escuro.
+        lv_obj_set_style_bg_color(lv_screen_active(), lv_color_white(), 0);
+        if (container_ != nullptr) {
+            lv_obj_set_style_bg_color(container_, lv_color_white(), 0);
+        }
+        if (emoji_label_ != nullptr) {
+            lv_obj_set_style_text_color(emoji_label_, ink, 0);  // ícones do começo do boot em tinta escura
+        }
         if (bottom_bar_ != nullptr) {
             lv_obj_set_style_bg_opa(bottom_bar_, LV_OPA_TRANSP, 0);
             const lv_font_t* font = lv_obj_get_style_text_font(lv_screen_active(), LV_PART_MAIN);

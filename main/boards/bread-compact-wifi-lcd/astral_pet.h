@@ -4,6 +4,7 @@
 #include "application.h"
 #include "astral_clock.h"
 #include "astral_display.h"
+#include "astral_music.h"
 #include "board.h"
 #include "display/display.h"
 #include "mcp_server.h"
@@ -340,6 +341,7 @@ private:
             ESP_LOGI("AstralPet", "Saudade: 3 h sem ninguem");
             if (!paused_.load() && Application::GetInstance().GetDeviceState() == kDeviceStateIdle) {
                 React("lonely", "Cadê você? Tô com saudade...", 6);
+                AttentionSound();
             }
         }
     }
@@ -367,8 +369,30 @@ private:
     void MealReminder(bool lunch) {
         ESP_LOGI("AstralPet", "Hora do %s: puxando conversa", lunch ? "almoco" : "jantar");
         React("delicious", lunch ? "Hora do almoço!" : "Hora do jantar!", 5);
+        AttentionSound();
         // O servidor só aceita frase curta aqui; o que fazer com ela está na descrição do self.pet.mood.
         Application::GetInstance().WakeWordInvoke(lunch ? "hora do almoço" : "hora do jantar");
+    }
+
+    // Quando ele quer chamar a sua atenção: o mesmo gritinho do susto (só parado, fora de conversa).
+    void AttentionSound() {
+        if (Application::GetInstance().GetDeviceState() == kDeviceStateIdle && !paused_.load()) {
+            StartleSound();
+        }
+    }
+
+    // Dança: toca a musiquinha e faz headbang enquanto ela dura.
+    void StartDance() {
+        int seconds = AstralMusic::Dance();
+        if (seconds <= 0) {
+            return;  // já está dançando
+        }
+        ESP_LOGI("AstralPet", "Dancando com musica (%d s)", seconds);
+        dance_until_us_ = esp_timer_get_time() + seconds * 1000000LL;
+        shown_while_idle_ = false;
+        mood_ = Clamp(mood_ + 2);
+        NoteInteraction(false);
+        Board::GetInstance().GetDisplay()->ShowNotification("Olha eu dançando!", 3000);
     }
 
     // "Iiih!": gritinho rápido subindo (susto).
@@ -428,6 +452,7 @@ private:
     bool lonely_ = false;            // saudade: horas sem ninguém
     int64_t last_interaction_us_ = 0;
     int64_t welcomed_back_us_ = -60 * 60 * 1000000LL;
+    bool boot_jingle_done_ = false;
     std::string test_face_;          // modo teste: rosto forçado
     int64_t test_face_until_us_ = 0;
     std::string pending_test_;       // modo teste: reação que roda quando a conversa fechar
@@ -567,6 +592,7 @@ private:
                 sleeping_ = false;  // acorda de manhã, disposto
                 mood_ = Clamp(mood_ + 5);
                 React("happy", "Bom dia!");
+                AttentionSound();
             } else if (sleeping_ && !IsNight() && energy_ >= 95) {
                 sleeping_ = false;  // de dia acorda quando a energia enche; de noite dorme até de manhã
             }
@@ -606,6 +632,10 @@ private:
                 close_after_reply_ = false;
                 app.ToggleChatState();
             }
+        }
+        if (!boot_jingle_done_ && state == kDeviceStateIdle) {
+            boot_jingle_done_ = true;
+            AstralMusic::BootJingle();  // "tô pronto!"
         }
         if (!pending_test_.empty() && state == kDeviceStateIdle && !close_after_reply_) {
             RunPendingTest();
@@ -785,6 +815,7 @@ private:
         if (display != nullptr) {
             display->ShowNotification(message, 5000);
         }
+        AttentionSound();
     }
 
     static const char* HungerText(float v) {
@@ -1011,12 +1042,24 @@ private:
         });
         mcp.AddTool(std::move(tool));
 
+        mcp.AddTool("self.pet.dance",
+                    "Dançar! Use quando o dono pedir para você dançar, mexer o corpo ou fazer uma dancinha. "
+                    "A conversa fecha e você toca uma musiquinha e dança na tela (uns 15 segundos). Responda "
+                    "so uma frase bem curta e animada, como 'Solta o som!'.",
+                    PropertyList(), [this](const PropertyList&) -> ReturnValue {
+                        pending_test_ = "danca";      // começa quando a conversa fechar
+                        close_after_reply_ = true;
+                        close_saw_reply_ = false;
+                        close_after_us_ = esp_timer_get_time();
+                        return std::string("{\"ok\":true}");
+                    });
+
         // Modo de teste do dono: põe o bichinho num estado na hora (para ver rostos e reações).
         mcp.AddTool("self.pet.test",
                     "MODO TESTE do dono. Use SOMENTE quando o dono disser 'modo teste' seguido do estado. "
                     "estado (uma palavra, sem acento): 'desmaiar', 'faminto', 'cheio', 'cansado', 'bolado', "
                     "'doente', 'enjoado', 'saudade', 'volta', 'susto', 'musica', 'chuva', 'frio', 'sol', "
-                    "'semclima', 'almoco', 'jantar', 'normal'. Depois responda so 'Modo teste: <estado>.'",
+                    "'semclima', 'almoco', 'jantar', 'danca', 'normal'. Depois responda so 'Modo teste: <estado>.'",
                     PropertyList({Property("estado", kPropertyTypeString)}),
                     [this](const PropertyList& p) -> ReturnValue { return SetTestState(p["estado"].value<std::string>()); });
     }
@@ -1043,6 +1086,8 @@ private:
             dance_until_us_ = esp_timer_get_time() + 15 * 1000000LL;
             Board::GetInstance().GetDisplay()->ShowNotification("Que som!", 3000);
             shown_while_idle_ = false;
+        } else if (test == "danca") {
+            StartDance();
         } else if (test == "almoco" || test == "jantar") {
             MealReminder(test == "almoco");
         }
@@ -1099,7 +1144,7 @@ private:
         } else if (state == "semclima") {
             weather_ = kWeatherNone;
         } else if (state == "volta" || state == "susto" || state == "musica" || state == "almoco" ||
-                   state == "jantar") {
+                   state == "jantar" || state == "danca") {
             pending_test_ = state;  // acontece quando a conversa fechar
         } else {
             return "{\"ok\":false,\"erro\":\"estado desconhecido\"}";
