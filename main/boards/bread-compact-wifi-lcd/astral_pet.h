@@ -638,6 +638,9 @@ private:
     int64_t last_interaction_us_ = 0;
     int64_t welcomed_back_us_ = -60 * 60 * 1000000LL;
     bool boot_jingle_done_ = false;
+    bool gallery_active_ = false;       // modo teste rostos
+    int gallery_index_ = -1;
+    int64_t gallery_next_us_ = 0;
     bool forced_react_ = false;         // reação mostrada no meio de uma conversa
     int64_t next_idle_anim_us_ = 0;     // próxima animação de espera
     int64_t mash_start_us_ = 0;         // botão sem parar
@@ -832,6 +835,12 @@ private:
                 close_after_reply_ = false;
                 app.ToggleChatState();
             }
+        }
+        if (state != kDeviceStateIdle && gallery_active_ && gallery_index_ >= 0) {
+            StopGallery();  // começou uma conversa: para a galeria
+        }
+        if (state == kDeviceStateIdle) {
+            StepGallery(now_us);
         }
         CheckNetwork(state, now_us);
         CheckPomodoro(now_us);
@@ -1306,9 +1315,50 @@ private:
                     "estado (uma palavra, sem acento): 'desmaiar', 'faminto', 'cheio', 'cansado', 'bolado', "
                     "'doente', 'enjoado', 'saudade', 'volta', 'susto', 'musica', 'chuva', 'frio', 'sol', "
                     "'semclima', 'almoco', 'jantar', 'danca', 'bocejo', 'olhar', 'assobio', 'tonto', 'semnet', "
-                    "'passeio', 'normal'. Depois responda so 'Modo teste: <estado>.'",
+                    "'passeio', 'rostos' (mostra todos os rostos), 'normal'. Depois responda so 'Modo teste: <estado>.'",
                     PropertyList({Property("estado", kPropertyTypeString)}),
                     [this](const PropertyList& p) -> ReturnValue { return SetTestState(p["estado"].value<std::string>()); });
+    }
+
+    // Galeria: todos os rostos, um a cada 4 s, com número e nome no topo.
+    static constexpr const char* kAllFaces[] = {
+        "neutral", "happy", "laughing", "funny", "loving", "kissy", "winking", "confident", "cool",
+        "relaxed", "silly", "delicious", "whistle", "headbang", "looking", "yawn", "sleepy", "thinking",
+        "confused", "surprised", "shocked", "embarrassed", "sad", "crying", "lonely", "angry", "sick",
+        "fainted", "nauseous", "vomit", "dizzy", "cold", "rainy", "focus", "game_open", "game_chomp",
+        "robot_2"};
+    static constexpr int kFaceCount = sizeof(kAllFaces) / sizeof(kAllFaces[0]);
+
+    // Liga a galeria: o primeiro rosto aparece no próximo Poll.
+    void StartGallery() {
+        gallery_active_ = true;
+        gallery_index_ = -1;
+        gallery_next_us_ = 0;
+    }
+
+    void StopGallery() {
+        gallery_active_ = false;
+        gallery_index_ = -1;
+        test_face_until_us_ = 0;
+        shown_while_idle_ = false;
+    }
+
+    void StepGallery(int64_t now_us) {
+        if (!gallery_active_ || now_us < gallery_next_us_) {
+            return;
+        }
+        if (++gallery_index_ >= kFaceCount) {
+            StopGallery();
+            Board::GetInstance().GetDisplay()->ShowNotification("Fim dos rostos!", 3000);
+            return;
+        }
+        gallery_next_us_ = now_us + 4 * 1000000LL;
+        test_face_ = kAllFaces[gallery_index_];
+        test_face_until_us_ = gallery_next_us_ + 1000000LL;
+        char buf[48];
+        snprintf(buf, sizeof(buf), "%d/%d %s", gallery_index_ + 1, kFaceCount, kAllFaces[gallery_index_]);
+        Board::GetInstance().GetDisplay()->ShowNotification(buf, 4000);
+        shown_while_idle_ = false;
     }
 
     // Mostra o rosto do teste por 20 s (a partir de quando a conversa fechar), passando na frente
@@ -1347,6 +1397,8 @@ private:
         } else if (test == "passeio") {
             React("cool", "Oba, passeando!", 4);
             AttentionSound();
+        } else if (test == "rostos") {
+            StartGallery();
         } else if (test == "danca") {
             StartDance();
         } else if (test == "almoco" || test == "jantar") {
@@ -1406,7 +1458,8 @@ private:
             weather_ = kWeatherNone;
         } else if (state == "volta" || state == "susto" || state == "musica" || state == "almoco" ||
                    state == "jantar" || state == "danca" || state == "bocejo" || state == "olhar" ||
-                   state == "assobio" || state == "tonto" || state == "semnet" || state == "passeio") {
+                   state == "assobio" || state == "tonto" || state == "semnet" || state == "passeio" ||
+                   state == "rostos") {
             pending_test_ = state;  // acontece quando a conversa fechar
         } else {
             return "{\"ok\":false,\"erro\":\"estado desconhecido\"}";
