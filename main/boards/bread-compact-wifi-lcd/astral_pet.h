@@ -100,7 +100,7 @@ public:
                 last_dizzy_us_ = now_us;
                 mood_ = Clamp(mood_ - 2);
                 ESP_LOGI("AstralPet", "Tonto de tanto apertar o botao");
-                React("dizzy", "Para, para... tô tonto!", 6);
+                React("dizzy", "Para, para... tô tonto!", 6, true);
             }
         });
     }
@@ -638,6 +638,7 @@ private:
     int64_t last_interaction_us_ = 0;
     int64_t welcomed_back_us_ = -60 * 60 * 1000000LL;
     bool boot_jingle_done_ = false;
+    bool forced_react_ = false;         // reação mostrada no meio de uma conversa
     int64_t next_idle_anim_us_ = 0;     // próxima animação de espera
     int64_t mash_start_us_ = 0;         // botão sem parar
     int mash_count_ = 0;
@@ -852,6 +853,13 @@ private:
 
         if (state != kDeviceStateIdle) {
             shown_while_idle_ = false;
+            // Reação forçada no meio da conversa: quando acaba, volta ao rosto normal da conversa.
+            if (forced_react_ && now_us >= react_until_us_) {
+                forced_react_ = false;
+                if (panel_display_ != nullptr && panel_display_->CurrentEmotion() == react_emotion_) {
+                    panel_display_->SetEmotion("neutral");
+                }
+            }
             return;
         }
         if (paused_.load()) {
@@ -1001,8 +1009,10 @@ private:
         return "happy";                                       // verde: sorrindo
     }
 
-    void React(const char* emotion, const char* message, int seconds = kReactSeconds) {
+    // force = mostra o rosto mesmo no meio de uma conversa (ex.: tontura).
+    void React(const char* emotion, const char* message, int seconds = kReactSeconds, bool force = false) {
         ESP_LOGI("AstralPet", "Reacao: %s (%s)", emotion, message);
+        forced_react_ = force && Application::GetInstance().GetDeviceState() != kDeviceStateIdle;
         react_emotion_ = emotion;
         react_until_us_ = esp_timer_get_time() + seconds * 1000000LL;
         shown_while_idle_ = false;  // força atualizar o rosto no próximo Poll
@@ -1012,6 +1022,8 @@ private:
                 display->SetEmotion(emotion);
                 shown_emotion_ = emotion;
                 shown_while_idle_ = true;
+            } else if (force) {
+                display->SetEmotion(emotion);  // no meio da conversa, só quando forçado
             }
             display->ShowNotification(message, seconds * 1000);
         }
