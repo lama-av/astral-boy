@@ -160,6 +160,14 @@ public:
     // Segurar o BOOT
     void Cuddle() {
         Application::GetInstance().Schedule([this]() {
+            // Durante o pomodoro, segurar o botão CANCELA o pomodoro (em vez de carinho).
+            if (pomo_phase_ != 0) {
+                int cycles = pomo_cycles_;
+                Pomodoro("parar", 0, 0);
+                ESP_LOGI("AstralPet", "Pomodoro cancelado pelo botao (%d ciclos)", cycles);
+                React("happy", cycles > 0 ? "Pomodoro encerrado. Bom trabalho!" : "Pomodoro cancelado!", 4);
+                return;
+            }
             if (!fainted_) {
                 sleeping_ = false;
             }
